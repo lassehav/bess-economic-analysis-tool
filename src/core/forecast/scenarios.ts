@@ -1,81 +1,53 @@
-import type { ScenarioYearParams } from './types'
+import type { ScenarioProfile, YearCapacityParams } from './types'
 
-export type ScenarioDefinition = {
-  id: string
-  name: string
-  description: string
-  getYearParams: (yearIndex: number) => ScenarioYearParams
+function lerpInt(a: number, b: number, t: number): number {
+  return Math.round(a + (b - a) * t)
 }
 
-function lerp(a: number, b: number, t: number): number {
-  return a + (b - a) * Math.max(0, Math.min(1, t))
+type CapacityEndpoints = Omit<YearCapacityParams, 'yearIndex' | 'priceRandomizer'>
+
+function buildYears(start: CapacityEndpoints, end: CapacityEndpoints): YearCapacityParams[] {
+  return Array.from({ length: 5 }, (_, i) => {
+    const t = i / 4
+    return {
+      yearIndex: i,
+      maxPowerConsumption: lerpInt(start.maxPowerConsumption, end.maxPowerConsumption, t),
+      constantBaseload: lerpInt(start.constantBaseload, end.constantBaseload, t),
+      nuclearCapacityMW: lerpInt(start.nuclearCapacityMW, end.nuclearCapacityMW, t),
+      windCapacityMW: lerpInt(start.windCapacityMW, end.windCapacityMW, t),
+      solarCapacityMW: lerpInt(start.solarCapacityMW, end.solarCapacityMW, t),
+      priceRandomizer: 0,
+    }
+  })
 }
 
-export const MILESTONE_LABELS: Record<string, string> = {
-  dc_load_ramp: 'Data Center Load Ramp',
-  wind_fleet_expansion: 'Wind Fleet Expansion',
-}
-
-export const MILESTONE_DESCRIPTIONS: Record<string, string> = {
-  dc_load_ramp:
-    'Large-scale data center and district heating boiler capacity comes online. Constant industrial baseload absorbs overnight surplus, suppressing negative price blocks.',
-  wind_fleet_expansion:
-    'Finnish and Baltic wind fleet reaches critical mass. High-generation windows become more frequent, driving down mean prices and amplifying negative price events during calm demand hours.',
-}
-
-export const SCENARIOS: ScenarioDefinition[] = [
+export const PRESET_SCENARIOS: ScenarioProfile[] = [
   {
-    id: 'status_quo',
-    name: 'Status Quo',
+    id: 'preset_datacenter',
+    name: 'High Datacenter Buildout',
     description:
-      'Baseline historical replication. All structural multipliers hold at 1.0 with standard drift. Represents continuation of current market dynamics without major structural change.',
-    getYearParams(yearIndex) {
-      return {
-        yearIndex,
-        meanLevelMultiplier: 1.0,
-        peakMultiplier: 1.0,
-        troughMultiplier: 1.0,
-        peakDurationMultiplier: 1.0,
-        activeStructuralMilestones: [],
-      }
-    },
+      'Aggressive data center development outstrips zero-carbon supply deployment. Constant load suppresses negative price floors while structural supply deficits create severe peaks during low-wind freeze patterns.',
+    isPreset: true,
+    updatedAt: '2026-01-01T00:00:00Z',
+    years: buildYears(
+      { maxPowerConsumption: 14000, constantBaseload: 9500, nuclearCapacityMW: 4300, windCapacityMW: 7000, solarCapacityMW: 1000 },
+      { maxPowerConsumption: 17500, constantBaseload: 13000, nuclearCapacityMW: 4300, windCapacityMW: 8500, solarCapacityMW: 1800 },
+    ),
   },
   {
-    id: 'data_center_boom',
-    name: 'Data Center Boom',
+    id: 'preset_green',
+    name: 'Balanced Green Transition',
     description:
-      'Demand-driven tightening from large-scale data center buildout and district heating electrification. Mean prices rise and overnight troughs are suppressed as constant industrial load absorbs surplus generation.',
-    getYearParams(yearIndex) {
-      const t = Math.min(yearIndex / 8, 1)
-      return {
-        yearIndex,
-        meanLevelMultiplier: lerp(1.0, 1.15, t),
-        peakMultiplier: lerp(1.0, 1.30, t),
-        troughMultiplier: lerp(1.0, 0.65, t),
-        peakDurationMultiplier: lerp(1.0, 1.12, t),
-        activeStructuralMilestones: yearIndex >= 3 ? ['dc_load_ramp'] : [],
-      }
-    },
-  },
-  {
-    id: 'renewable_surge',
-    name: 'Renewable Surge',
-    description:
-      'Aggressive Nordic wind and solar expansion drives mean prices lower while amplifying negative price events during high-generation blocks. BESS arbitrage opportunity intensifies.',
-    getYearParams(yearIndex) {
-      const t = Math.min(yearIndex / 10, 1)
-      return {
-        yearIndex,
-        meanLevelMultiplier: lerp(1.0, 0.85, t),
-        peakMultiplier: lerp(1.0, 1.05, t),
-        troughMultiplier: lerp(1.0, 1.70, t),
-        peakDurationMultiplier: lerp(1.0, 0.88, t),
-        activeStructuralMilestones: yearIndex >= 5 ? ['wind_fleet_expansion'] : [],
-      }
-    },
+      'Data center and green hydrogen buildouts advance in step with offshore wind and SMR deployments. High dispatchable capacity anchors baseline prices while wide peak-to-trough spreads create strong arbitrage conditions.',
+    isPreset: true,
+    updatedAt: '2026-01-01T00:00:00Z',
+    years: buildYears(
+      { maxPowerConsumption: 14000, constantBaseload: 9000, nuclearCapacityMW: 4300, windCapacityMW: 7000, solarCapacityMW: 1000 },
+      { maxPowerConsumption: 19000, constantBaseload: 11500, nuclearCapacityMW: 4900, windCapacityMW: 14500, solarCapacityMW: 3500 },
+    ),
   },
 ]
 
-export function getScenario(id: string): ScenarioDefinition {
-  return SCENARIOS.find((s) => s.id === id) ?? SCENARIOS[0]!
+export function getDefaultProfile(): ScenarioProfile {
+  return JSON.parse(JSON.stringify(PRESET_SCENARIOS[0]!)) as ScenarioProfile
 }

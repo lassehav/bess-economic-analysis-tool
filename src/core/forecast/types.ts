@@ -1,28 +1,33 @@
 export type HistoricalCalibration = {
-  // [12 months][24 hours] additive normalized shape profile (mean = 1 per month)
-  diurnalByMonth: number[][]
-  // Month-of-year level multipliers relative to annual mean. Length 12.
-  monthLevel: number[]
-  // Day-of-week multipliers. Length 7 (0=Sun). Defaults to all-ones if flat.
-  dayOfWeekLevel: number[]
+  diurnalByMonth: number[][]  // [12][24] normalized shape (mean=1 per month)
+  monthLevel: number[]         // [12] relative to annual mean
+  dayOfWeekLevel: number[]     // [7] 0=Sun
   annualMeanPrice: number
   annualMeanSpread: number
-  // AR(1) parameters in absolute €/MWh space (no log-space)
   residualAr1: number
   residualSigma: number
 }
 
-export type ScenarioYearParams = {
-  yearIndex: number
-  meanLevelMultiplier: number
-  peakMultiplier: number
-  troughMultiplier: number
-  // gamma exponent for power-transform of diurnal shape
-  peakDurationMultiplier: number
-  activeStructuralMilestones: string[]
+export type YearCapacityParams = {
+  yearIndex: number             // 0-based
+  maxPowerConsumption: number   // MW peak system load
+  constantBaseload: number      // MW inelastic + "cheap eaters"
+  solarCapacityMW: number
+  windCapacityMW: number
+  nuclearCapacityMW: number
+  priceRandomizer: number       // [-0.20, +0.20]
 }
 
-export type SimulationEventType = 'structural' | 'stochastic_outage' | 'fundamental_gap'
+export type ScenarioProfile = {
+  id: string
+  name: string
+  description: string
+  isPreset: boolean
+  updatedAt: string  // ISO timestamp
+  years: YearCapacityParams[]
+}
+
+export type SimulationEventType = 'structural_shift' | 'stochastic_outage' | 'dunkelflaute_shock'
 export type SimulationEventSeverity = 'info' | 'warning' | 'critical'
 
 export type SimulationEvent = {
