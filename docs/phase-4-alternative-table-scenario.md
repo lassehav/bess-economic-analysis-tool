@@ -1,6 +1,4 @@
-Here is the updated and expanded plan.md file content. This version incorporates the two specific default capacity scenarios—**High Datacenter Buildout (Generation Lagging)** and **Balanced Green Transition (Synchronized)**—and establishes a robust client-side schema for saving, naming, and persisting custom scenario tables.
 
-```markdown
 # Phase 4 — Capacity Scenario Editor, Presets & Physical Price Synthesis Engine
 
 **Effort:** 8–11 days  
@@ -229,11 +227,3 @@ The ECharts panel matches events directly to the physical causes computed in the
 * **Emergent Structural Trends:** Verification tests confirm that setting `nuclearCapacityMW` to double its historical baseline depresses the annual integrated mean price by $\ge 15\%$ without manual multipliers.
 * **Insulated Boundary Checks:** The behavioral randomizer field is strictly constrained within the range $[-0.20, +0.20]$. Entering values outside this range throws a validation block inside the UI editor matrix.
 * **Table-to-Graph State Binding:** Altering any individual cell capacity metric in the editable grid triggers an automated background recalculation thread, redrawing the chart line coordinates within a 250ms rendering ceiling.
-
-```
-
-### Next Steps for Implementation
-1. Save this comprehensive text payload directly over your project's current plan.md file.
-2. Initialize Claude Code inside your command terminal interface and target it directly: @plan.md Please generate the ScenarioProfile seed presets, construct the persistence service layer, and link it to our interactive grid UI component.
-
-```

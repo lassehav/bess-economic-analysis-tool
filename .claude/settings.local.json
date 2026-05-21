@@ -5,7 +5,9 @@
       "Bash(Select-String \"hookform\")",
       "Bash(npm install *)",
       "Bash(npx vitest *)",
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "Bash(Get-ChildItem -Path \"c:\\\\opinnot\\\\energian varastointi\\\\bess-analyzer\" -Directory)",
+      "Bash(Select-Object Name)"
     ]
   }
 }

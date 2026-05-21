@@ -1,10 +1,45 @@
-import { useRef, useState, useEffect, useMemo } from 'react'
+import { useRef, useState, useEffect, useMemo, useCallback } from 'react'
 import ReactECharts from 'echarts-for-react'
 import type { ECharts } from 'echarts'
 import type { PriceSeries } from '../../core/types/prices'
-import { runForecast, calibrateFromHistory, generateForecast } from '../../core/forecast/index'
-import { SCENARIOS, getScenario } from '../../core/forecast/scenarios'
-import type { MultiYearForecastOutput, SimulationEvent, HistoricalCalibration } from '../../core/forecast/index'
+import { runForecast, calibrateFromHistory, generateForecast, PRESET_SCENARIOS, getDefaultProfile } from '../../core/forecast/index'
+import type {
+  MultiYearForecastOutput,
+  SimulationEvent,
+  HistoricalCalibration,
+  ScenarioProfile,
+  YearCapacityParams,
+} from '../../core/forecast/index'
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const LS_PREFIX = 'bess-analyzer.scenario.'
+const BASE_YEAR = 2026
+
+// ─── LocalStorage helpers ─────────────────────────────────────────────────────
+
+function loadCustomScenarios(): ScenarioProfile[] {
+  const result: ScenarioProfile[] = []
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i)
+    if (!key?.startsWith(LS_PREFIX)) continue
+    try {
+      const raw = localStorage.getItem(key)
+      if (raw) result.push(JSON.parse(raw) as ScenarioProfile)
+    } catch {
+      // ignore malformed entries
+    }
+  }
+  return result
+}
+
+function saveCustomScenario(profile: ScenarioProfile): void {
+  localStorage.setItem(`${LS_PREFIX}${profile.id}`, JSON.stringify(profile))
+}
+
+function deleteCustomScenario(id: string): void {
+  localStorage.removeItem(`${LS_PREFIX}${id}`)
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -15,19 +50,19 @@ function severityColor(s: SimulationEvent['severity']): string {
 }
 
 function typeColor(t: SimulationEvent['type']): string {
-  if (t === 'fundamental_gap') return 'rgba(59,130,246,0.09)'
+  if (t === 'dunkelflaute_shock') return 'rgba(249,115,22,0.12)'
   if (t === 'stochastic_outage') return 'rgba(239,68,68,0.09)'
   return 'rgba(34,197,94,0.09)'
 }
 
 function typeBorderColor(t: SimulationEvent['type']): string {
-  if (t === 'fundamental_gap') return 'rgba(59,130,246,0.3)'
+  if (t === 'dunkelflaute_shock') return 'rgba(249,115,22,0.35)'
   if (t === 'stochastic_outage') return 'rgba(239,68,68,0.3)'
   return 'rgba(34,197,94,0.3)'
 }
 
 function typeLabel(t: SimulationEvent['type']): string {
-  if (t === 'fundamental_gap') return 'Gap'
+  if (t === 'dunkelflaute_shock') return 'Dunkelflaute'
   if (t === 'stochastic_outage') return 'Outage'
   return 'Structural'
 }
@@ -38,13 +73,32 @@ function hourIndexToYearDay(h: number): string {
   return `Y${year} D${dayOfYear}`
 }
 
+function profilesAreEqual(a: YearCapacityParams[], b: YearCapacityParams[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    const ra = a[i]!
+    const rb = b[i]!
+    if (
+      ra.maxPowerConsumption !== rb.maxPowerConsumption ||
+      ra.constantBaseload !== rb.constantBaseload ||
+      ra.solarCapacityMW !== rb.solarCapacityMW ||
+      ra.windCapacityMW !== rb.windCapacityMW ||
+      ra.nuclearCapacityMW !== rb.nuclearCapacityMW ||
+      ra.priceRandomizer !== rb.priceRandomizer
+    ) {
+      return false
+    }
+  }
+  return true
+}
+
 // ─── Event badge ─────────────────────────────────────────────────────────────
 
 function EventTypeBadge({ type }: { type: SimulationEvent['type'] }) {
   const label = typeLabel(type)
   const cls =
-    type === 'fundamental_gap'
-      ? 'bg-blue-50 text-blue-700 border-blue-200'
+    type === 'dunkelflaute_shock'
+      ? 'bg-orange-50 text-orange-700 border-orange-200'
       : type === 'stochastic_outage'
         ? 'bg-red-50 text-red-700 border-red-200'
         : 'bg-green-50 text-green-700 border-green-200'
@@ -87,7 +141,7 @@ function EventCard({
       </div>
       <p className="font-medium text-gray-800 leading-snug">{event.title}</p>
       <p className="mt-0.5 text-gray-500 leading-snug line-clamp-2">{event.description}</p>
-      {event.metricDelta?.priceImpactEur !== undefined && (
+      {event.metricDelta?.priceImpactEur !== undefined && event.metricDelta.priceImpactEur !== 0 && (
         <p className="mt-1 font-medium" style={{ color: severityColor(event.severity) }}>
           {event.metricDelta.priceImpactEur > 0 ? '+' : ''}
           {event.metricDelta.priceImpactEur.toFixed(0)} €/MWh
@@ -106,12 +160,11 @@ function ForecastChart({
   output: MultiYearForecastOutput
   onChartReady: (instance: ECharts) => void
 }) {
-  // Build markArea data from events — all in one series for performance
   const markAreaData = useMemo(() => {
-    const areas: [[object, object]] | [object, object][] = []
+    const areas: [object, object][] = []
     for (const ev of output.events) {
       const duration = ev.endHourIndex - ev.startHourIndex
-      if (duration < 6) continue // skip too-short events for markArea
+      if (duration < 6) continue
       areas.push([
         {
           xAxis: ev.startHourIndex,
@@ -124,7 +177,6 @@ function ForecastChart({
     return areas
   }, [output.events])
 
-  // Build markPoint data for very short events (point shocks)
   const markPointData = useMemo(() => {
     return output.events
       .filter((ev) => ev.endHourIndex - ev.startHourIndex < 6)
@@ -185,9 +237,7 @@ function ForecastChart({
               : undefined,
           markPoint:
             markPointData.length > 0
-              ? {
-                  data: markPointData,
-                }
+              ? { data: markPointData }
               : undefined,
         },
       ],
@@ -208,9 +258,6 @@ function ForecastChart({
 // ─── Backtest panel ───────────────────────────────────────────────────────────
 
 function BacktestPanel({ series }: { series: PriceSeries }) {
-  // Derive valid calibration years from actual data range.
-  // calibYear N → calibrate on data up to end of N, test on year N+1.
-  // Requires N+1 to exist in the series (even partially).
   const startYear = new Date(series.startUtc).getUTCFullYear()
   const endYear = new Date(series.endUtc).getUTCFullYear()
   const calibYears = Array.from(
@@ -235,10 +282,9 @@ function BacktestPanel({ series }: { series: PriceSeries }) {
       const testStart = `${parseInt(calibYear) + 1}-01-01`
 
       const cal: HistoricalCalibration = calibrateFromHistory(series, undefined, calibEnd)
-      const synthOutput = generateForecast(cal, [getScenario('status_quo').getYearParams(1)], 42)
+      const synthOutput = generateForecast(cal, getDefaultProfile(), 42)
       const synth = synthOutput.hourlyPrices.slice(0, 8760)
 
-      // Extract actual test year prices
       const testStartMs = new Date(testStart + 'T00:00:00Z').getTime()
       const seriesStartMs = new Date(series.startUtc).getTime()
       const startIdx = Math.round((testStartMs - seriesStartMs) / 3_600_000)
@@ -249,7 +295,6 @@ function BacktestPanel({ series }: { series: PriceSeries }) {
         return
       }
 
-      // Monthly mean comparison (±15% tolerance)
       const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
       const MONTH_STARTS = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334].map((d) => d * 24)
       const MONTH_ENDS = [31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 365].map((d) => d * 24)
@@ -265,7 +310,6 @@ function BacktestPanel({ series }: { series: PriceSeries }) {
         return { month: name, synth: sMean, actual: aMean, delta, pass: Math.abs(delta) <= 0.15 }
       })
 
-      // Kolmogorov-Smirnov statistic on daily spread distributions
       const synthSpreads = Array.from({ length: 365 }, (_, d) => {
         const sl = synth.slice(d * 24, (d + 1) * 24)
         return sl.length ? Math.max(...sl) - Math.min(...sl) : 0
@@ -420,17 +464,295 @@ function BacktestPanel({ series }: { series: PriceSeries }) {
   )
 }
 
+// ─── Save-As Modal ────────────────────────────────────────────────────────────
+
+function SaveAsModal({
+  onConfirm,
+  onCancel,
+}: {
+  onConfirm: (name: string, description: string) => void
+  onCancel: () => void
+}) {
+  const [name, setName] = useState('')
+  const [description, setDescription] = useState('')
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="w-96 rounded-lg border border-gray-200 bg-white p-6 shadow-xl">
+        <h3 className="mb-4 text-sm font-semibold text-gray-900">Save scenario as...</h3>
+        <div className="mb-3">
+          <label className="mb-1 block text-xs font-medium text-gray-700">Name</label>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="My scenario"
+            className="w-full rounded border border-gray-300 px-2.5 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
+            autoFocus
+          />
+        </div>
+        <div className="mb-5">
+          <label className="mb-1 block text-xs font-medium text-gray-700">Description</label>
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="Brief description of this scenario..."
+            rows={3}
+            className="w-full rounded border border-gray-300 px-2.5 py-1.5 text-sm focus:border-blue-500 focus:outline-none resize-none"
+          />
+        </div>
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => { if (name.trim()) onConfirm(name.trim(), description.trim()) }}
+            disabled={!name.trim()}
+            className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40"
+          >
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Scenario Editor Table ────────────────────────────────────────────────────
+
+type CellError = {
+  baseloadTooHigh?: boolean
+  renewableRatioHigh?: boolean
+}
+
+function ScenarioEditorTable({
+  years,
+  onChange,
+}: {
+  years: YearCapacityParams[]
+  onChange: (updated: YearCapacityParams[]) => void
+}) {
+  function updateRow(rowIdx: number, field: keyof Omit<YearCapacityParams, 'yearIndex'>, value: number) {
+    const updated = years.map((row, i) =>
+      i === rowIdx ? { ...row, [field]: value } : row,
+    )
+    onChange(updated)
+  }
+
+  function propagateDown(rowIdx: number) {
+    if (rowIdx >= years.length - 1) return
+    const src = years[rowIdx]!
+    const updated = years.map((row, i) =>
+      i === rowIdx + 1
+        ? {
+            ...src,
+            yearIndex: i,
+          }
+        : row,
+    )
+    onChange(updated)
+  }
+
+  function getCellErrors(row: YearCapacityParams): CellError {
+    const errors: CellError = {}
+    if (row.constantBaseload > row.maxPowerConsumption) {
+      errors.baseloadTooHigh = true
+    }
+    if ((row.windCapacityMW + row.solarCapacityMW) > row.maxPowerConsumption * 3) {
+      errors.renewableRatioHigh = true
+    }
+    return errors
+  }
+
+  const numInputCls = (hasError: boolean, isWarning = false) =>
+    [
+      'w-full rounded border px-1.5 py-0.5 text-right text-xs focus:outline-none focus:ring-1',
+      hasError
+        ? isWarning
+          ? 'border-amber-400 bg-amber-50 focus:ring-amber-400'
+          : 'border-red-400 bg-red-50 focus:ring-red-400'
+        : 'border-gray-200 bg-white focus:ring-blue-400',
+    ].join(' ')
+
+  return (
+    <div className="overflow-x-auto rounded border border-gray-200">
+      <table className="min-w-full text-xs">
+        <thead>
+          <tr className="border-b border-gray-200 bg-gray-50">
+            <th className="px-3 py-2 text-left font-semibold text-gray-700 whitespace-nowrap">Year</th>
+            <th className="px-2 py-2 text-right font-semibold text-gray-700 whitespace-nowrap">
+              Max Consumption (MW)
+            </th>
+            <th className="px-2 py-2 text-right font-semibold text-gray-700 whitespace-nowrap">
+              Constant Baseload (MW)
+            </th>
+            <th className="px-2 py-2 text-right font-semibold text-gray-700 whitespace-nowrap">
+              Solar (MW)
+            </th>
+            <th className="px-2 py-2 text-right font-semibold text-gray-700 whitespace-nowrap">
+              Wind (MW)
+            </th>
+            <th className="px-2 py-2 text-right font-semibold text-gray-700 whitespace-nowrap">
+              Nuclear (MW)
+            </th>
+            <th className="px-2 py-2 text-center font-semibold text-gray-700 whitespace-nowrap">
+              Randomizer
+            </th>
+            <th className="px-2 py-2 text-center font-semibold text-gray-700 whitespace-nowrap w-8"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {years.map((row, i) => {
+            const errors = getCellErrors(row)
+            const displayYear = BASE_YEAR + row.yearIndex
+            return (
+              <tr key={row.yearIndex} className="border-b border-gray-100 last:border-0 hover:bg-gray-50/60">
+                <td className="px-3 py-1.5 font-semibold text-gray-700">{displayYear}</td>
+
+                {/* Max Consumption */}
+                <td className="px-2 py-1.5">
+                  <input
+                    type="number"
+                    value={row.maxPowerConsumption}
+                    min={1000}
+                    max={50000}
+                    step={100}
+                    onChange={(e) => updateRow(i, 'maxPowerConsumption', Number(e.target.value))}
+                    className={numInputCls(false)}
+                  />
+                </td>
+
+                {/* Constant Baseload */}
+                <td className="px-2 py-1.5 relative group">
+                  <input
+                    type="number"
+                    value={row.constantBaseload}
+                    min={0}
+                    max={50000}
+                    step={100}
+                    onChange={(e) => updateRow(i, 'constantBaseload', Number(e.target.value))}
+                    className={numInputCls(errors.baseloadTooHigh === true)}
+                  />
+                  {errors.baseloadTooHigh && (
+                    <span className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 -translate-x-1/2 whitespace-nowrap rounded bg-red-700 px-2 py-1 text-[10px] text-white opacity-0 group-hover:opacity-100 transition-opacity">
+                      Cannot exceed max consumption
+                    </span>
+                  )}
+                </td>
+
+                {/* Solar */}
+                <td className="px-2 py-1.5 relative group">
+                  <input
+                    type="number"
+                    value={row.solarCapacityMW}
+                    min={0}
+                    max={50000}
+                    step={100}
+                    onChange={(e) => updateRow(i, 'solarCapacityMW', Number(e.target.value))}
+                    className={numInputCls(errors.renewableRatioHigh === true, true)}
+                  />
+                  {errors.renewableRatioHigh && (
+                    <span className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 -translate-x-1/2 whitespace-nowrap rounded bg-amber-700 px-2 py-1 text-[10px] text-white opacity-0 group-hover:opacity-100 transition-opacity">
+                      High negative-price probability (&gt;300% capacity ratio)
+                    </span>
+                  )}
+                </td>
+
+                {/* Wind */}
+                <td className="px-2 py-1.5 relative group">
+                  <input
+                    type="number"
+                    value={row.windCapacityMW}
+                    min={0}
+                    max={50000}
+                    step={100}
+                    onChange={(e) => updateRow(i, 'windCapacityMW', Number(e.target.value))}
+                    className={numInputCls(errors.renewableRatioHigh === true, true)}
+                  />
+                  {errors.renewableRatioHigh && (
+                    <span className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 -translate-x-1/2 whitespace-nowrap rounded bg-amber-700 px-2 py-1 text-[10px] text-white opacity-0 group-hover:opacity-100 transition-opacity">
+                      High negative-price probability (&gt;300% capacity ratio)
+                    </span>
+                  )}
+                </td>
+
+                {/* Nuclear */}
+                <td className="px-2 py-1.5">
+                  <input
+                    type="number"
+                    value={row.nuclearCapacityMW}
+                    min={0}
+                    max={20000}
+                    step={100}
+                    onChange={(e) => updateRow(i, 'nuclearCapacityMW', Number(e.target.value))}
+                    className={numInputCls(false)}
+                  />
+                </td>
+
+                {/* Randomizer */}
+                <td className="px-2 py-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="range"
+                      min={-0.2}
+                      max={0.2}
+                      step={0.01}
+                      value={row.priceRandomizer}
+                      onChange={(e) => updateRow(i, 'priceRandomizer', Number(e.target.value))}
+                      className="w-20"
+                    />
+                    <span className="w-10 text-right text-gray-500">
+                      {row.priceRandomizer >= 0 ? '+' : ''}
+                      {(row.priceRandomizer * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                </td>
+
+                {/* Propagate button */}
+                <td className="px-2 py-1.5 text-center">
+                  {i < years.length - 1 && (
+                    <button
+                      type="button"
+                      onClick={() => propagateDown(i)}
+                      title="Copy this row to the row below"
+                      className="rounded border border-gray-200 px-1.5 py-0.5 text-[10px] text-gray-500 hover:border-blue-400 hover:text-blue-600 transition-colors"
+                    >
+                      ↓
+                    </button>
+                  )}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 // ─── Main ScenariosView ───────────────────────────────────────────────────────
 
 export default function ScenariosView() {
   const [series, setSeries] = useState<PriceSeries | null>(null)
-  const [scenarioId, setScenarioId] = useState('status_quo')
-  const [yearCount, setYearCount] = useState(10)
+  const [customScenarios, setCustomScenarios] = useState<ScenarioProfile[]>(() => loadCustomScenarios())
+  const [activeProfileId, setActiveProfileId] = useState<string>(PRESET_SCENARIOS[0]!.id)
+  const [editingYears, setEditingYears] = useState<YearCapacityParams[]>(() =>
+    PRESET_SCENARIOS[0]!.years.map((y) => ({ ...y })),
+  )
+  const [baselineYears, setBaselineYears] = useState<YearCapacityParams[]>(() =>
+    PRESET_SCENARIOS[0]!.years.map((y) => ({ ...y })),
+  )
   const [seed, setSeed] = useState(42)
   const [output, setOutput] = useState<MultiYearForecastOutput | null>(null)
   const [running, setRunning] = useState(false)
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<'forecast' | 'backtest'>('forecast')
+  const [showSaveAs, setShowSaveAs] = useState(false)
 
   const chartInstanceRef = useRef<ECharts | null>(null)
 
@@ -441,13 +763,131 @@ export default function ScenariosView() {
       .catch(() => {})
   }, [])
 
+  const allProfiles: ScenarioProfile[] = useMemo(
+    () => [...PRESET_SCENARIOS, ...customScenarios],
+    [customScenarios],
+  )
+
+  const activeProfile = useMemo(
+    () => allProfiles.find((p) => p.id === activeProfileId) ?? PRESET_SCENARIOS[0]!,
+    [allProfiles, activeProfileId],
+  )
+
+  const isDirty = useMemo(
+    () => !profilesAreEqual(editingYears, baselineYears),
+    [editingYears, baselineYears],
+  )
+
+  const handleSelectProfile = useCallback(
+    (id: string) => {
+      const profile = allProfiles.find((p) => p.id === id) ?? PRESET_SCENARIOS[0]!
+      setActiveProfileId(id)
+      const copy = profile.years.map((y) => ({ ...y }))
+      setEditingYears(copy)
+      setBaselineYears(copy.map((y) => ({ ...y })))
+      setOutput(null)
+    },
+    [allProfiles],
+  )
+
+  function handleSave() {
+    if (activeProfile.isPreset || !isDirty) return
+    const updated: ScenarioProfile = {
+      ...activeProfile,
+      years: editingYears,
+      updatedAt: new Date().toISOString(),
+    }
+    saveCustomScenario(updated)
+    setCustomScenarios(loadCustomScenarios())
+    setBaselineYears(editingYears.map((y) => ({ ...y })))
+  }
+
+  function handleSaveAs(name: string, description: string) {
+    const newId = typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : Date.now().toString()
+    const newProfile: ScenarioProfile = {
+      id: newId,
+      name,
+      description,
+      isPreset: false,
+      updatedAt: new Date().toISOString(),
+      years: editingYears.map((y) => ({ ...y })),
+    }
+    saveCustomScenario(newProfile)
+    const reloaded = loadCustomScenarios()
+    setCustomScenarios(reloaded)
+    setActiveProfileId(newId)
+    setBaselineYears(editingYears.map((y) => ({ ...y })))
+    setShowSaveAs(false)
+  }
+
+  function handleExportJson() {
+    const exportProfile: ScenarioProfile = {
+      ...activeProfile,
+      years: editingYears,
+    }
+    const blob = new Blob([JSON.stringify(exportProfile, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${activeProfile.name.replace(/\s+/g, '-').toLowerCase()}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  function handleImportJson(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      try {
+        const parsed = JSON.parse(ev.target?.result as string) as ScenarioProfile
+        if (!parsed.id || !parsed.name || !Array.isArray(parsed.years)) {
+          alert('Invalid scenario file format.')
+          return
+        }
+        // If it was a preset, re-assign a new ID to store as custom
+        const importId = parsed.isPreset
+          ? (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString())
+          : parsed.id
+        const importProfile: ScenarioProfile = {
+          ...parsed,
+          id: importId,
+          isPreset: false,
+          updatedAt: new Date().toISOString(),
+        }
+        saveCustomScenario(importProfile)
+        const reloaded = loadCustomScenarios()
+        setCustomScenarios(reloaded)
+        handleSelectProfile(importId)
+      } catch {
+        alert('Failed to parse JSON file.')
+      }
+    }
+    reader.readAsText(file)
+    // Reset file input
+    e.target.value = ''
+  }
+
+  function handleDelete() {
+    if (activeProfile.isPreset) return
+    deleteCustomScenario(activeProfile.id)
+    const reloaded = loadCustomScenarios()
+    setCustomScenarios(reloaded)
+    handleSelectProfile(PRESET_SCENARIOS[0]!.id)
+  }
+
   function handleRun() {
     if (!series) return
     setRunning(true)
-    // Yield to React for the spinner, then run synchronously
     setTimeout(() => {
       try {
-        const result = runForecast(series, scenarioId, yearCount, seed)
+        const profileToRun: ScenarioProfile = {
+          ...activeProfile,
+          years: editingYears,
+        }
+        const result = runForecast(series, profileToRun, seed)
         setOutput(result)
         setSelectedEventId(null)
       } finally {
@@ -460,7 +900,7 @@ export default function ScenariosView() {
     setSelectedEventId(event.id)
     const instance = chartInstanceRef.current
     if (!instance) return
-    const pad = 168 // ±7 days in hours for context
+    const pad = 168
     instance.dispatchAction({
       type: 'dataZoom',
       dataZoomIndex: 0,
@@ -469,53 +909,92 @@ export default function ScenariosView() {
     })
   }
 
-  const scenario = getScenario(scenarioId)
-
-  // Event counts per type for summary
   const eventCounts = useMemo(() => {
     if (!output) return null
-    const counts: Record<string, number> = { structural: 0, stochastic_outage: 0, fundamental_gap: 0 }
+    const counts: Record<string, number> = { structural_shift: 0, stochastic_outage: 0, dunkelflaute_shock: 0 }
     for (const ev of output.events) counts[ev.type] = (counts[ev.type] ?? 0) + 1
     return counts
   }, [output])
 
   return (
     <div className="flex flex-col gap-0 h-[calc(100vh-130px)]">
-      {/* ── Top toolbar ── */}
-      <div className="flex shrink-0 items-center gap-3 border-b border-gray-200 px-4 py-3">
+      {showSaveAs && (
+        <SaveAsModal
+          onConfirm={handleSaveAs}
+          onCancel={() => setShowSaveAs(false)}
+        />
+      )}
+
+      {/* ── Header Toolbar ── */}
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-gray-200 px-4 py-2.5">
         <h2 className="text-base font-semibold">Scenarios</h2>
 
-        {/* Scenario selector */}
-        <div className="flex gap-1">
-          {SCENARIOS.map((s) => (
-            <button
-              key={s.id}
-              type="button"
-              onClick={() => setScenarioId(s.id)}
-              className={[
-                'rounded border px-3 py-1 text-xs font-medium transition-colors',
-                scenarioId === s.id
-                  ? 'border-blue-600 bg-blue-600 text-white'
-                  : 'border-gray-300 text-gray-600 hover:border-gray-400',
-              ].join(' ')}
-            >
-              {s.name}
-            </button>
-          ))}
+        {/* Profile dropdown + dirty indicator */}
+        <div className="flex items-center gap-1">
+          {isDirty && (
+            <span className="h-2 w-2 rounded-full bg-orange-400" title="Unsaved changes" />
+          )}
+          <select
+            value={activeProfileId}
+            onChange={(e) => handleSelectProfile(e.target.value)}
+            className="rounded border border-gray-300 px-2 py-1 text-sm text-gray-800 focus:border-blue-500 focus:outline-none"
+          >
+            <optgroup label="Presets">
+              {PRESET_SCENARIOS.map((p) => (
+                <option key={p.id} value={p.id}>{p.name} (Preset)</option>
+              ))}
+            </optgroup>
+            {customScenarios.length > 0 && (
+              <optgroup label="Custom">
+                {customScenarios.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </optgroup>
+            )}
+          </select>
         </div>
 
-        <div className="flex items-center gap-1.5">
-          <label className="text-xs text-gray-500">Years</label>
-          <input
-            type="number"
-            value={yearCount}
-            min={1}
-            max={25}
-            onChange={(e) => setYearCount(Math.max(1, Math.min(25, parseInt(e.target.value) || 10)))}
-            className="w-14 rounded border border-gray-300 px-2 py-0.5 text-sm"
-          />
-        </div>
+        {/* Action buttons */}
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={activeProfile.isPreset || !isDirty}
+          className="rounded border border-gray-300 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+          title={activeProfile.isPreset ? 'Cannot overwrite a preset — use Save As...' : 'Save changes'}
+        >
+          Save
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowSaveAs(true)}
+          className="rounded border border-gray-300 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
+        >
+          Save As...
+        </button>
+        <button
+          type="button"
+          onClick={handleExportJson}
+          className="rounded border border-gray-300 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
+        >
+          Export JSON
+        </button>
+        <label className="cursor-pointer rounded border border-gray-300 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50">
+          Import JSON
+          <input type="file" accept=".json" className="hidden" onChange={handleImportJson} />
+        </label>
+        <button
+          type="button"
+          onClick={handleDelete}
+          disabled={activeProfile.isPreset}
+          className="rounded border border-red-200 px-2.5 py-1 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-40"
+          title={activeProfile.isPreset ? 'Cannot delete a preset' : 'Delete this scenario'}
+        >
+          Delete
+        </button>
 
+        <div className="mx-1 h-5 border-l border-gray-200" />
+
+        {/* Seed */}
         <div className="flex items-center gap-1.5">
           <label className="text-xs text-gray-500">Seed</label>
           <input
@@ -527,13 +1006,14 @@ export default function ScenariosView() {
           />
         </div>
 
+        {/* Generate button */}
         <button
           type="button"
           onClick={handleRun}
           disabled={!series || running}
           className="rounded bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40"
         >
-          {running ? 'Generating...' : 'Generate forecast'}
+          {running ? 'Generating...' : 'Generate Forecast'}
         </button>
 
         {!series && <span className="text-xs text-gray-400">Waiting for price data...</span>}
@@ -541,13 +1021,10 @@ export default function ScenariosView() {
         {eventCounts && (
           <div className="ml-auto flex gap-3 text-xs text-gray-500">
             <span>
-              <span className="font-medium text-green-700">{eventCounts['structural']}</span> structural
+              <span className="font-medium text-orange-600">{eventCounts['dunkelflaute_shock']}</span> dunkelflaute
             </span>
             <span>
               <span className="font-medium text-red-600">{eventCounts['stochastic_outage']}</span> outages
-            </span>
-            <span>
-              <span className="font-medium text-blue-700">{eventCounts['fundamental_gap']}</span> gap events
             </span>
           </div>
         )}
@@ -555,8 +1032,14 @@ export default function ScenariosView() {
 
       {/* ── Scenario description ── */}
       <div className="shrink-0 border-b border-gray-100 bg-gray-50 px-4 py-2 text-xs text-gray-600">
-        <span className="font-medium text-gray-800">{scenario.name}: </span>
-        {scenario.description}
+        <span className="font-medium text-gray-800">{activeProfile.name}: </span>
+        {activeProfile.description}
+        <span className="ml-3 text-gray-400">5-year horizon (2026–2030)</span>
+      </div>
+
+      {/* ── Scenario Editor Table ── */}
+      <div className="shrink-0 border-b border-gray-200 bg-white px-4 py-3">
+        <ScenarioEditorTable years={editingYears} onChange={setEditingYears} />
       </div>
 
       {/* ── Tab bar ── */}
@@ -589,7 +1072,7 @@ export default function ScenariosView() {
           </div>
         ) : !output ? (
           <div className="flex h-full items-center justify-center text-sm text-gray-400">
-            Select a scenario and press Generate forecast.
+            Edit the capacity table above and press Generate Forecast.
           </div>
         ) : (
           <div className="flex h-full">

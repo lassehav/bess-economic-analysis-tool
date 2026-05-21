@@ -12,17 +12,26 @@ export type HistoricalCalibration = {
   residualSigma: number
 }
 
-export type ScenarioYearParams = {
-  yearIndex: number
-  meanLevelMultiplier: number
-  peakMultiplier: number
-  troughMultiplier: number
-  // gamma exponent for power-transform of diurnal shape
-  peakDurationMultiplier: number
-  activeStructuralMilestones: string[]
+export type YearCapacityParams = {
+  yearIndex: number             // 0-based
+  maxPowerConsumption: number   // MW
+  constantBaseload: number      // MW
+  solarCapacityMW: number       // MW
+  windCapacityMW: number        // MW
+  nuclearCapacityMW: number     // MW
+  priceRandomizer: number       // [-0.20, +0.20]
 }
 
-export type SimulationEventType = 'structural' | 'stochastic_outage' | 'fundamental_gap'
+export type ScenarioProfile = {
+  id: string
+  name: string
+  description: string
+  isPreset: boolean
+  updatedAt: string             // ISO timestamp
+  years: YearCapacityParams[]
+}
+
+export type SimulationEventType = 'structural_shift' | 'stochastic_outage' | 'dunkelflaute_shock'
 export type SimulationEventSeverity = 'info' | 'warning' | 'critical'
 
 export type SimulationEvent = {
