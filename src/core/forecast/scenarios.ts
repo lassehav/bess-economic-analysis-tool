@@ -6,9 +6,9 @@ function lerpInt(a: number, b: number, t: number): number {
 
 type CapacityEndpoints = Omit<YearCapacityParams, 'yearIndex' | 'priceRandomizer'>
 
-function buildYears(start: CapacityEndpoints, end: CapacityEndpoints): YearCapacityParams[] {
-  return Array.from({ length: 5 }, (_, i) => {
-    const t = i / 4
+function buildYears(start: CapacityEndpoints, end: CapacityEndpoints, count: number): YearCapacityParams[] {
+  return Array.from({ length: count }, (_, i) => {
+    const t = count > 1 ? i / (count - 1) : 0
     return {
       yearIndex: i,
       maxPowerConsumption: lerpInt(start.maxPowerConsumption, end.maxPowerConsumption, t),
@@ -21,6 +21,7 @@ function buildYears(start: CapacityEndpoints, end: CapacityEndpoints): YearCapac
   })
 }
 
+// 10-year presets: 2026–2035
 export const PRESET_SCENARIOS: ScenarioProfile[] = [
   {
     id: 'preset_datacenter',
@@ -31,7 +32,8 @@ export const PRESET_SCENARIOS: ScenarioProfile[] = [
     updatedAt: '2026-01-01T00:00:00Z',
     years: buildYears(
       { maxPowerConsumption: 14000, constantBaseload: 9500, nuclearCapacityMW: 4300, windCapacityMW: 7000, solarCapacityMW: 1000 },
-      { maxPowerConsumption: 17500, constantBaseload: 13000, nuclearCapacityMW: 4300, windCapacityMW: 8500, solarCapacityMW: 1800 },
+      { maxPowerConsumption: 20000, constantBaseload: 15500, nuclearCapacityMW: 4300, windCapacityMW: 10000, solarCapacityMW: 3000 },
+      10,
     ),
   },
   {
@@ -43,7 +45,8 @@ export const PRESET_SCENARIOS: ScenarioProfile[] = [
     updatedAt: '2026-01-01T00:00:00Z',
     years: buildYears(
       { maxPowerConsumption: 14000, constantBaseload: 9000, nuclearCapacityMW: 4300, windCapacityMW: 7000, solarCapacityMW: 1000 },
-      { maxPowerConsumption: 19000, constantBaseload: 11500, nuclearCapacityMW: 4900, windCapacityMW: 14500, solarCapacityMW: 3500 },
+      { maxPowerConsumption: 22000, constantBaseload: 13000, nuclearCapacityMW: 7000, windCapacityMW: 22000, solarCapacityMW: 7000 },
+      10,
     ),
   },
 ]

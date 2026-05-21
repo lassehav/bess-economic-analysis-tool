@@ -22,7 +22,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-white text-black">
       <header className="border-b border-black px-6 py-4">
-        <h1 className="text-xl font-semibold tracking-tight">BESS Analyzer</h1>
+        <h1 className="text-xl font-semibold tracking-tight">BESS Analyzer | Lasse Haverinen</h1>
         <p className="mt-0.5 text-sm text-gray-500">
           Battery Energy Storage — LCOS &amp; Economic Profitability
         </p>

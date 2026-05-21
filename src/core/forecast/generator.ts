@@ -45,6 +45,10 @@ export function generateForecast(
 
   let ar1State = 0
   let eventCounter = 0
+  // Declared outside year loop so a dunkelflaute can span a year boundary
+  let dunkelflauteDaysLeft = 0
+  // ~1 event per 6 years; winter window ≈ 150 days → rate per winter day
+  const DUNK_PROB_PER_WINTER_DAY = 1.0 / (6.0 * 150)
 
   for (let y = 0; y < totalYears; y++) {
     const params = profile.years[y]!
@@ -56,18 +60,40 @@ export function generateForecast(
     const Rrenew = (windCapacityMW + solarCapacityMW) / maxPowerConsumption
     const volatilityMult = 1.0 + 0.6 * Rrenew
 
-    let dunkelflauteStartHour: number | null = null
+    // Randomizer magnitude is unsigned; direction is drawn once per year
+    const yearRandomizer = (uniform() < 0.5 ? 1 : -1) * priceRandomizer
 
     for (let d = 0; d < 365; d++) {
       const m = dayOfYearToMonthIdx(d + 1)
       const dow = (y * 365 + d) % 7
       const hourBase = yearHourBase + d * 24
+      const isWinterDay = m >= 10 || m <= 2  // Nov–Mar
+
+      // Roll for a new dunkelflaute event (winter only, not while one is active)
+      if (isWinterDay && dunkelflauteDaysLeft === 0 && uniform() < DUNK_PROB_PER_WINTER_DAY) {
+        const duration = 5 + Math.floor(uniform() * 26)  // 5–30 days
+        dunkelflauteDaysLeft = duration
+        const endHour = Math.min(hourBase + duration * 24, totalHours)
+        const impact = Math.round(500 * Math.pow((maxPowerConsumption - nuclearCapacityMW) / maxPowerConsumption, 2) * volatilityMult)
+        events.push({
+          id: `dunkelflaute-${++eventCounter}`,
+          type: 'dunkelflaute_shock',
+          severity: 'critical',
+          title: 'Windless Winter Freeze',
+          description: `Persistent high-pressure system eliminates wind output for ${duration} days. Physical supply gap drives extreme scarcity prices.`,
+          startHourIndex: hourBase,
+          endHourIndex: endHour,
+          metricDelta: { priceImpactEur: impact },
+        })
+      }
 
       // AR(1) daily residual in €/MWh space
       ar1State = residualAr1 * ar1State + residualSigma * normal()
 
-      // Daily stochastic weather draws
-      const omega_daily = Math.max(0.02, Math.min(0.95, WIND_CF_BY_MONTH[m]! + 0.12 * normal()))
+      // Daily weather draws — wind forced very low during dunkelflaute
+      const omega_daily = dunkelflauteDaysLeft > 0
+        ? 0.01 + 0.03 * uniform()  // 1–4% CF during windless freeze
+        : Math.max(0.02, Math.min(0.95, WIND_CF_BY_MONTH[m]! + 0.12 * normal()))
       const insolation_daily = Math.max(0.05, Math.min(1.5, 1.0 + 0.3 * normal()))
 
       for (let h = 0; h < 24; h++) {
@@ -79,29 +105,10 @@ export function generateForecast(
         const Prenew = windCapacityMW * omega_h + solarCapacityMW * sigma_h
         const Gt = maxPowerConsumption - (nuclearCapacityMW + Prenew)
 
-        // Condition A: Dunkelflaute shock
+        // Condition A: Dunkelflaute shock — fires naturally because omega is forced low
         let shockImpact = 0
-        const isDunkelflaute = Gt > 0 && (omega_h + sigma_h) < 0.08
-
-        if (isDunkelflaute) {
+        if (Gt > 0 && (omega_h + sigma_h) < 0.08) {
           shockImpact = 500 * Math.pow(Gt / maxPowerConsumption, 2) * volatilityMult
-          if (dunkelflauteStartHour === null) {
-            dunkelflauteStartHour = hourIdx
-          }
-        } else if (dunkelflauteStartHour !== null) {
-          const durationH = hourIdx - dunkelflauteStartHour
-          const avgImpact = 500 * Math.pow((maxPowerConsumption - nuclearCapacityMW) / maxPowerConsumption, 2) * volatilityMult
-          events.push({
-            id: `dunkelflaute-${++eventCounter}`,
-            type: 'dunkelflaute_shock',
-            severity: 'critical',
-            title: 'Windless Winter Freeze',
-            description: `Zero-wind/solar period lasting ${Math.round(durationH / 24)} day(s). Physical supply gap drives extreme scarcity prices.`,
-            startHourIndex: dunkelflauteStartHour,
-            endHourIndex: hourIdx,
-            metricDelta: { priceImpactEur: Math.round(avgImpact) },
-          })
-          dunkelflauteStartHour = null
         }
 
         // Condition B: Oversupply compression
@@ -114,26 +121,15 @@ export function generateForecast(
         const diurnalRow = diurnalByMonth[m] ?? diurnalByMonth[0]!
         const mu_h = annualMeanPrice * (monthLevel[m] ?? 1) * (dayOfWeekLevel[dow % 7] ?? 1) * (diurnalRow[h] ?? 1)
 
-        const rawPrice = (mu_h + deltaBase + ar1State * volatilityMult + shockImpact + priceCompression) * (1.0 + priceRandomizer)
-        hourlyPrices[hourIdx] = Math.max(-500, Math.min(4000, rawPrice))
+        // volatilityMult amplifies upward residuals (renewable scarcity peaks) but
+        // not negative ones — downside is governed by priceCompression, not noise amplification
+        const residualContrib = ar1State > 0 ? ar1State * volatilityMult : ar1State
+        const rawPrice = (mu_h + deltaBase + residualContrib + shockImpact + priceCompression) * (1.0 + yearRandomizer)
+        // Finnish market floor: deep negatives occur but rarely below -100 €/MWh
+        hourlyPrices[hourIdx] = Math.max(-100, Math.min(4000, rawPrice))
       }
-    }
 
-    // Close any dunkelflaute event that spans year boundary
-    if (dunkelflauteStartHour !== null) {
-      const endHour = yearHourBase + 365 * 24
-      const durationH = endHour - dunkelflauteStartHour
-      events.push({
-        id: `dunkelflaute-${++eventCounter}`,
-        type: 'dunkelflaute_shock',
-        severity: 'critical',
-        title: 'Windless Winter Freeze',
-        description: `Zero-wind/solar period lasting ${Math.round(durationH / 24)} day(s).`,
-        startHourIndex: dunkelflauteStartHour,
-        endHourIndex: endHour,
-        metricDelta: { priceImpactEur: Math.round(500 * volatilityMult) },
-      })
-      dunkelflauteStartHour = null
+      if (dunkelflauteDaysLeft > 0) dunkelflauteDaysLeft--
     }
   }
 

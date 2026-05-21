@@ -13,7 +13,11 @@ import type {
 } from '../../core/forecast/index'
 
 const LS_PREFIX = 'bess-analyzer.scenario.'
-const YEAR_LABELS = ['2026', '2027', '2028', '2029', '2030']
+const BASE_YEAR = 2026
+
+function yearLabel(yearIndex: number): string {
+  return String(BASE_YEAR + yearIndex)
+}
 
 // ─── LocalStorage helpers ─────────────────────────────────────────────────────
 
@@ -42,7 +46,7 @@ function deleteCustomProfile(id: string) {
 function hourIndexToLabel(h: number): string {
   const yearIdx = Math.floor(h / 8760)
   const dayOfYear = Math.floor((h % 8760) / 24) + 1
-  return `${YEAR_LABELS[yearIdx] ?? `Y${yearIdx + 1}`} D${dayOfYear}`
+  return `${yearLabel(yearIdx)} D${dayOfYear}`
 }
 
 function severityColor(s: SimulationEvent['severity']): string {
@@ -135,33 +139,19 @@ function ForecastChart({
   const markAreaData = useMemo(() => {
     const areas: [object, object][] = []
     for (const ev of output.events) {
-      if (ev.endHourIndex - ev.startHourIndex < 6) continue
+      // Minimum display width: 7 days (168 h) so zones stay visible at full zoom
+      const endHour = Math.max(ev.endHourIndex, ev.startHourIndex + 168)
       areas.push([
         {
           xAxis: ev.startHourIndex,
           name: ev.title,
           itemStyle: { color: typeColor(ev.type), borderColor: typeBorderColor(ev.type) },
         },
-        { xAxis: ev.endHourIndex },
+        { xAxis: endHour },
       ])
     }
     return areas
   }, [output.events])
-
-  const markPointData = useMemo(
-    () =>
-      output.events
-        .filter((ev) => ev.endHourIndex - ev.startHourIndex < 6)
-        .map((ev) => ({
-          coord: [ev.startHourIndex, output.hourlyPrices[ev.startHourIndex] ?? 0],
-          name: ev.title,
-          symbol: 'pin',
-          symbolSize: 18,
-          itemStyle: { color: severityColor(ev.severity) },
-          label: { show: false },
-        })),
-    [output.events, output.hourlyPrices],
-  )
 
   const option = useMemo(
     () => ({
@@ -192,7 +182,7 @@ function ForecastChart({
           data: output.hourlyPrices.map((p, i) => [i, p]),
           large: true,
           largeThreshold: 5000,
-          sampling: 'average' as const,
+          sampling: 'lttb' as const,
           showSymbol: false,
           lineStyle: { color: '#2563eb', width: 1 },
           itemStyle: { color: '#2563eb' },
@@ -200,11 +190,10 @@ function ForecastChart({
             markAreaData.length > 0
               ? { silent: true, data: markAreaData, label: { show: false } }
               : undefined,
-          markPoint: markPointData.length > 0 ? { data: markPointData } : undefined,
         },
       ],
     }),
-    [output, markAreaData, markPointData],
+    [output, markAreaData],
   )
 
   return (
@@ -317,7 +306,7 @@ function BacktestPanel({ series }: { series: PriceSeries }) {
           data: result.synth.map((p, i) => [i, p]),
           large: true,
           largeThreshold: 3000,
-          sampling: 'average' as const,
+          sampling: 'lttb' as const,
           showSymbol: false,
           lineStyle: { color: '#2563eb', width: 1 },
         },
@@ -327,7 +316,7 @@ function BacktestPanel({ series }: { series: PriceSeries }) {
           data: result.actual.map((p, i) => [i, p]),
           large: true,
           largeThreshold: 3000,
-          sampling: 'average' as const,
+          sampling: 'lttb' as const,
           showSymbol: false,
           lineStyle: { color: '#ef4444', width: 1, opacity: 0.7 },
         },
@@ -498,7 +487,7 @@ function ScenarioTable({
             const renewableWarn = warnings.find((w) => w.field === 'renewables')
             return (
               <tr key={row.yearIndex} className="border-b border-gray-100 hover:bg-gray-50">
-                <td className="py-1 pl-3 pr-2 font-semibold text-gray-700">{YEAR_LABELS[i]}</td>
+                <td className="py-1 pl-3 pr-2 font-semibold text-gray-700">{yearLabel(row.yearIndex)}</td>
                 <td className="py-1 px-2">
                   <div className="flex justify-end">
                     <NumInput
@@ -549,7 +538,7 @@ function ScenarioTable({
                   <div className="flex items-center gap-1.5 justify-center">
                     <input
                       type="range"
-                      min={-0.2}
+                      min={0}
                       max={0.2}
                       step={0.01}
                       value={row.priceRandomizer}
@@ -557,8 +546,7 @@ function ScenarioTable({
                       className="w-20 h-1.5 accent-blue-600"
                     />
                     <span className="w-10 text-right text-gray-600 font-mono">
-                      {row.priceRandomizer >= 0 ? '+' : ''}
-                      {(row.priceRandomizer * 100).toFixed(0)}%
+                      ±{(row.priceRandomizer * 100).toFixed(0)}%
                     </span>
                   </div>
                 </td>
@@ -876,7 +864,32 @@ export default function ScenariosView() {
         </div>
 
         <div className="ml-auto flex items-center gap-2">
-          <span className="text-xs text-gray-400">5-year horizon (2026–2030)</span>
+          <div className="flex items-center gap-1">
+            <label className="text-xs text-gray-500">Years</label>
+            <input
+              type="number"
+              min={1}
+              max={25}
+              value={tableRows.length}
+              onChange={(e) => {
+                const n = Math.max(1, Math.min(25, parseInt(e.target.value) || 1))
+                setTableRows((prev) => {
+                  if (n === prev.length) return prev
+                  if (n < prev.length) return prev.slice(0, n)
+                  const next = [...prev]
+                  while (next.length < n) {
+                    const last = next[next.length - 1]!
+                    next.push({ ...last, yearIndex: next.length })
+                  }
+                  return next
+                })
+              }}
+              className="w-14 rounded border border-gray-300 px-2 py-0.5 text-sm"
+            />
+            <span className="text-xs text-gray-400">
+              ({yearLabel(0)}–{yearLabel(tableRows.length - 1)})
+            </span>
+          </div>
           <div className="flex items-center gap-1">
             <label className="text-xs text-gray-500">Seed</label>
             <input
@@ -906,7 +919,7 @@ export default function ScenariosView() {
       </div>
 
       {/* ── Scenario Editor Table ── */}
-      <div className="shrink-0 border-b border-gray-200">
+      <div className="shrink-0 border-b border-gray-200 max-h-[220px] overflow-y-auto">
         <ScenarioTable rows={tableRows} onUpdate={updateRow} onPropagate={propagateRow} />
       </div>
 
