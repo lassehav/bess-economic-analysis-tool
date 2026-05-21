@@ -2,7 +2,8 @@ import { useRef, useState, useEffect, useMemo, useCallback } from 'react'
 import ReactECharts from 'echarts-for-react'
 import type { ECharts } from 'echarts'
 import type { PriceSeries } from '../../core/types/prices'
-import { runForecast, calibrateFromHistory, generateForecast, PRESET_SCENARIOS, getDefaultProfile } from '../../core/forecast/index'
+import { runForecast, calibrateFromHistory, generateForecast } from '../../core/forecast/index'
+import { PRESET_SCENARIOS, getDefaultProfile } from '../../core/forecast/scenarios'
 import type {
   MultiYearForecastOutput,
   SimulationEvent,
@@ -11,37 +12,38 @@ import type {
   YearCapacityParams,
 } from '../../core/forecast/index'
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-
 const LS_PREFIX = 'bess-analyzer.scenario.'
-const BASE_YEAR = 2026
+const YEAR_LABELS = ['2026', '2027', '2028', '2029', '2030']
 
 // ─── LocalStorage helpers ─────────────────────────────────────────────────────
 
-function loadCustomScenarios(): ScenarioProfile[] {
+function loadCustomProfiles(): ScenarioProfile[] {
   const result: ScenarioProfile[] = []
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i)
     if (!key?.startsWith(LS_PREFIX)) continue
     try {
-      const raw = localStorage.getItem(key)
-      if (raw) result.push(JSON.parse(raw) as ScenarioProfile)
-    } catch {
-      // ignore malformed entries
-    }
+      result.push(JSON.parse(localStorage.getItem(key)!) as ScenarioProfile)
+    } catch {}
   }
   return result
 }
 
-function saveCustomScenario(profile: ScenarioProfile): void {
+function saveCustomProfile(profile: ScenarioProfile) {
   localStorage.setItem(`${LS_PREFIX}${profile.id}`, JSON.stringify(profile))
 }
 
-function deleteCustomScenario(id: string): void {
+function deleteCustomProfile(id: string) {
   localStorage.removeItem(`${LS_PREFIX}${id}`)
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Formatting helpers ───────────────────────────────────────────────────────
+
+function hourIndexToLabel(h: number): string {
+  const yearIdx = Math.floor(h / 8760)
+  const dayOfYear = Math.floor((h % 8760) / 24) + 1
+  return `${YEAR_LABELS[yearIdx] ?? `Y${yearIdx + 1}`} D${dayOfYear}`
+}
 
 function severityColor(s: SimulationEvent['severity']): string {
   if (s === 'critical') return '#dc2626'
@@ -67,35 +69,9 @@ function typeLabel(t: SimulationEvent['type']): string {
   return 'Structural'
 }
 
-function hourIndexToYearDay(h: number): string {
-  const year = Math.floor(h / 8760) + 1
-  const dayOfYear = Math.floor((h % 8760) / 24) + 1
-  return `Y${year} D${dayOfYear}`
-}
-
-function profilesAreEqual(a: YearCapacityParams[], b: YearCapacityParams[]): boolean {
-  if (a.length !== b.length) return false
-  for (let i = 0; i < a.length; i++) {
-    const ra = a[i]!
-    const rb = b[i]!
-    if (
-      ra.maxPowerConsumption !== rb.maxPowerConsumption ||
-      ra.constantBaseload !== rb.constantBaseload ||
-      ra.solarCapacityMW !== rb.solarCapacityMW ||
-      ra.windCapacityMW !== rb.windCapacityMW ||
-      ra.nuclearCapacityMW !== rb.nuclearCapacityMW ||
-      ra.priceRandomizer !== rb.priceRandomizer
-    ) {
-      return false
-    }
-  }
-  return true
-}
-
-// ─── Event badge ─────────────────────────────────────────────────────────────
+// ─── Sub-components ───────────────────────────────────────────────────────────
 
 function EventTypeBadge({ type }: { type: SimulationEvent['type'] }) {
-  const label = typeLabel(type)
   const cls =
     type === 'dunkelflaute_shock'
       ? 'bg-orange-50 text-orange-700 border-orange-200'
@@ -104,12 +80,10 @@ function EventTypeBadge({ type }: { type: SimulationEvent['type'] }) {
         : 'bg-green-50 text-green-700 border-green-200'
   return (
     <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${cls}`}>
-      {label}
+      {typeLabel(type)}
     </span>
   )
 }
-
-// ─── Event Card ───────────────────────────────────────────────────────────────
 
 function EventCard({
   event,
@@ -137,11 +111,11 @@ function EventCard({
           className="h-1.5 w-1.5 shrink-0 rounded-full"
           style={{ backgroundColor: severityColor(event.severity) }}
         />
-        <span className="ml-auto text-gray-400">{hourIndexToYearDay(event.startHourIndex)}</span>
+        <span className="ml-auto text-gray-400">{hourIndexToLabel(event.startHourIndex)}</span>
       </div>
       <p className="font-medium text-gray-800 leading-snug">{event.title}</p>
       <p className="mt-0.5 text-gray-500 leading-snug line-clamp-2">{event.description}</p>
-      {event.metricDelta?.priceImpactEur !== undefined && event.metricDelta.priceImpactEur !== 0 && (
+      {event.metricDelta?.priceImpactEur !== undefined && (
         <p className="mt-1 font-medium" style={{ color: severityColor(event.severity) }}>
           {event.metricDelta.priceImpactEur > 0 ? '+' : ''}
           {event.metricDelta.priceImpactEur.toFixed(0)} €/MWh
@@ -150,8 +124,6 @@ function EventCard({
     </button>
   )
 }
-
-// ─── Price Forecast Chart ─────────────────────────────────────────────────────
 
 function ForecastChart({
   output,
@@ -163,8 +135,7 @@ function ForecastChart({
   const markAreaData = useMemo(() => {
     const areas: [object, object][] = []
     for (const ev of output.events) {
-      const duration = ev.endHourIndex - ev.startHourIndex
-      if (duration < 6) continue
+      if (ev.endHourIndex - ev.startHourIndex < 6) continue
       areas.push([
         {
           xAxis: ev.startHourIndex,
@@ -177,18 +148,20 @@ function ForecastChart({
     return areas
   }, [output.events])
 
-  const markPointData = useMemo(() => {
-    return output.events
-      .filter((ev) => ev.endHourIndex - ev.startHourIndex < 6)
-      .map((ev) => ({
-        coord: [ev.startHourIndex, output.hourlyPrices[ev.startHourIndex] ?? 0],
-        name: ev.title,
-        symbol: 'pin',
-        symbolSize: 18,
-        itemStyle: { color: severityColor(ev.severity) },
-        label: { show: false },
-      }))
-  }, [output.events, output.hourlyPrices])
+  const markPointData = useMemo(
+    () =>
+      output.events
+        .filter((ev) => ev.endHourIndex - ev.startHourIndex < 6)
+        .map((ev) => ({
+          coord: [ev.startHourIndex, output.hourlyPrices[ev.startHourIndex] ?? 0],
+          name: ev.title,
+          symbol: 'pin',
+          symbolSize: 18,
+          itemStyle: { color: severityColor(ev.severity) },
+          label: { show: false },
+        })),
+    [output.events, output.hourlyPrices],
+  )
 
   const option = useMemo(
     () => ({
@@ -197,9 +170,7 @@ function ForecastChart({
         formatter: (params: { value: [number, number] }[]) => {
           const p = params[0]
           if (!p) return ''
-          const h = p.value[0]
-          const price = p.value[1]
-          return `${hourIndexToYearDay(h)}<br/>${price.toFixed(1)} €/MWh`
+          return `${hourIndexToLabel(p.value[0])}<br/>${p.value[1].toFixed(1)} €/MWh`
         },
       },
       grid: { left: 60, right: 20, top: 20, bottom: 50 },
@@ -208,9 +179,7 @@ function ForecastChart({
         name: 'Hour',
         min: 0,
         max: output.totalHours - 1,
-        axisLabel: {
-          formatter: (v: number) => hourIndexToYearDay(v),
-        },
+        axisLabel: { formatter: (v: number) => hourIndexToLabel(v) },
       },
       yAxis: { type: 'value', name: '€/MWh' },
       dataZoom: [
@@ -229,16 +198,9 @@ function ForecastChart({
           itemStyle: { color: '#2563eb' },
           markArea:
             markAreaData.length > 0
-              ? {
-                  silent: true,
-                  data: markAreaData,
-                  label: { show: false },
-                }
+              ? { silent: true, data: markAreaData, label: { show: false } }
               : undefined,
-          markPoint:
-            markPointData.length > 0
-              ? { data: markPointData }
-              : undefined,
+          markPoint: markPointData.length > 0 ? { data: markPointData } : undefined,
         },
       ],
     }),
@@ -249,13 +211,11 @@ function ForecastChart({
     <ReactECharts
       option={option}
       notMerge
-      style={{ height: '100%', minHeight: 420 }}
+      style={{ height: '100%', minHeight: 360 }}
       onChartReady={onChartReady}
     />
   )
 }
-
-// ─── Backtest panel ───────────────────────────────────────────────────────────
 
 function BacktestPanel({ series }: { series: PriceSeries }) {
   const startYear = new Date(series.startUtc).getUTCFullYear()
@@ -280,7 +240,6 @@ function BacktestPanel({ series }: { series: PriceSeries }) {
     try {
       const calibEnd = `${calibYear}-12-31`
       const testStart = `${parseInt(calibYear) + 1}-01-01`
-
       const cal: HistoricalCalibration = calibrateFromHistory(series, undefined, calibEnd)
       const synthOutput = generateForecast(cal, getDefaultProfile(), 42)
       const synth = synthOutput.hourlyPrices.slice(0, 8760)
@@ -315,10 +274,13 @@ function BacktestPanel({ series }: { series: PriceSeries }) {
         return sl.length ? Math.max(...sl) - Math.min(...sl) : 0
       }).sort((a, b) => a - b)
 
-      const actualSpreads = Array.from({ length: Math.min(365, Math.floor(actual.length / 24)) }, (_, d) => {
-        const sl = actual.slice(d * 24, (d + 1) * 24)
-        return sl.length ? Math.max(...sl) - Math.min(...sl) : 0
-      }).sort((a, b) => a - b)
+      const actualSpreads = Array.from(
+        { length: Math.min(365, Math.floor(actual.length / 24)) },
+        (_, d) => {
+          const sl = actual.slice(d * 24, (d + 1) * 24)
+          return sl.length ? Math.max(...sl) - Math.min(...sl) : 0
+        },
+      ).sort((a, b) => a - b)
 
       let maxDiff = 0
       const n = Math.max(synthSpreads.length, actualSpreads.length)
@@ -330,7 +292,7 @@ function BacktestPanel({ series }: { series: PriceSeries }) {
         maxDiff = Math.max(maxDiff, Math.abs(sCdf - aCdf))
       }
 
-      setResult({ synth, actual, monthMeans, ksStat: maxDiff, ksPass: maxDiff < 0.10 })
+      setResult({ synth, actual, monthMeans, ksStat: maxDiff, ksPass: maxDiff < 0.1 })
     } finally {
       setRunning(false)
     }
@@ -338,8 +300,6 @@ function BacktestPanel({ series }: { series: PriceSeries }) {
 
   const chartOption = useMemo(() => {
     if (!result) return {}
-    const synthData = result.synth.map((p, i) => [i, p])
-    const actualData = result.actual.map((p, i) => [i, p])
     return {
       legend: { data: ['Synthetic', 'Actual'], top: 0 },
       tooltip: { trigger: 'axis' },
@@ -354,7 +314,7 @@ function BacktestPanel({ series }: { series: PriceSeries }) {
         {
           name: 'Synthetic',
           type: 'line',
-          data: synthData,
+          data: result.synth.map((p, i) => [i, p]),
           large: true,
           largeThreshold: 3000,
           sampling: 'average' as const,
@@ -364,7 +324,7 @@ function BacktestPanel({ series }: { series: PriceSeries }) {
         {
           name: 'Actual',
           type: 'line',
-          data: actualData,
+          data: result.actual.map((p, i) => [i, p]),
           large: true,
           largeThreshold: 3000,
           sampling: 'average' as const,
@@ -407,8 +367,7 @@ function BacktestPanel({ series }: { series: PriceSeries }) {
 
       {result && (
         <>
-          <ReactECharts option={chartOption} notMerge style={{ height: 300 }} />
-
+          <ReactECharts option={chartOption} notMerge style={{ height: 280 }} />
           <div className="flex items-center gap-4 text-sm">
             <span>
               Monthly mean:{' '}
@@ -425,7 +384,6 @@ function BacktestPanel({ series }: { series: PriceSeries }) {
               <span className="text-gray-500">(pass &lt; 0.10)</span>
             </span>
           </div>
-
           <div className="overflow-x-auto">
             <table className="min-w-full text-xs">
               <thead>
@@ -447,11 +405,7 @@ function BacktestPanel({ series }: { series: PriceSeries }) {
                       {(m.delta * 100).toFixed(1)}%
                     </td>
                     <td className="py-0.5 text-center">
-                      {m.pass ? (
-                        <span className="text-green-600">✓</span>
-                      ) : (
-                        <span className="text-red-500">✗</span>
-                      )}
+                      {m.pass ? <span className="text-green-600">✓</span> : <span className="text-red-500">✗</span>}
                     </td>
                   </tr>
                 ))}
@@ -464,263 +418,157 @@ function BacktestPanel({ series }: { series: PriceSeries }) {
   )
 }
 
-// ─── Save-As Modal ────────────────────────────────────────────────────────────
+// ─── Scenario Editor Table ────────────────────────────────────────────────────
 
-function SaveAsModal({
-  onConfirm,
-  onCancel,
+type RowWarning = { field: string; message: string; level: 'error' | 'warning' }
+
+function getRowWarnings(row: YearCapacityParams): RowWarning[] {
+  const w: RowWarning[] = []
+  if (row.constantBaseload > row.maxPowerConsumption) {
+    w.push({ field: 'constantBaseload', message: 'Cannot exceed max consumption', level: 'error' })
+  }
+  if (row.windCapacityMW + row.solarCapacityMW > row.maxPowerConsumption * 3) {
+    w.push({
+      field: 'renewables',
+      message: 'High negative-price probability (>300% capacity ratio)',
+      level: 'warning',
+    })
+  }
+  return w
+}
+
+function NumInput({
+  value,
+  onChange,
+  highlight,
+  title,
 }: {
-  onConfirm: (name: string, description: string) => void
-  onCancel: () => void
+  value: number
+  onChange: (v: number) => void
+  highlight?: 'error' | 'warning' | null
+  title?: string
 }) {
-  const [name, setName] = useState('')
-  const [description, setDescription] = useState('')
-
+  const cls = highlight === 'error'
+    ? 'border-red-400 bg-red-50 focus:ring-red-300'
+    : highlight === 'warning'
+      ? 'border-amber-400 bg-amber-50 focus:ring-amber-300'
+      : 'border-gray-300 bg-white focus:ring-blue-300'
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="w-96 rounded-lg border border-gray-200 bg-white p-6 shadow-xl">
-        <h3 className="mb-4 text-sm font-semibold text-gray-900">Save scenario as...</h3>
-        <div className="mb-3">
-          <label className="mb-1 block text-xs font-medium text-gray-700">Name</label>
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="My scenario"
-            className="w-full rounded border border-gray-300 px-2.5 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
-            autoFocus
-          />
-        </div>
-        <div className="mb-5">
-          <label className="mb-1 block text-xs font-medium text-gray-700">Description</label>
-          <textarea
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="Brief description of this scenario..."
-            rows={3}
-            className="w-full rounded border border-gray-300 px-2.5 py-1.5 text-sm focus:border-blue-500 focus:outline-none resize-none"
-          />
-        </div>
-        <div className="flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={() => { if (name.trim()) onConfirm(name.trim(), description.trim()) }}
-            disabled={!name.trim()}
-            className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40"
-          >
-            Save
-          </button>
-        </div>
-      </div>
-    </div>
+    <input
+      type="number"
+      value={value}
+      title={title}
+      onChange={(e) => {
+        const v = parseFloat(e.target.value)
+        if (!isNaN(v)) onChange(v)
+      }}
+      className={`w-24 rounded border px-2 py-0.5 text-right text-xs focus:outline-none focus:ring-1 ${cls}`}
+    />
   )
 }
 
-// ─── Scenario Editor Table ────────────────────────────────────────────────────
-
-type CellError = {
-  baseloadTooHigh?: boolean
-  renewableRatioHigh?: boolean
-}
-
-function ScenarioEditorTable({
-  years,
-  onChange,
+function ScenarioTable({
+  rows,
+  onUpdate,
+  onPropagate,
 }: {
-  years: YearCapacityParams[]
-  onChange: (updated: YearCapacityParams[]) => void
+  rows: YearCapacityParams[]
+  onUpdate: (rowIdx: number, field: keyof Omit<YearCapacityParams, 'yearIndex'>, value: number) => void
+  onPropagate: (rowIdx: number) => void
 }) {
-  function updateRow(rowIdx: number, field: keyof Omit<YearCapacityParams, 'yearIndex'>, value: number) {
-    const updated = years.map((row, i) =>
-      i === rowIdx ? { ...row, [field]: value } : row,
-    )
-    onChange(updated)
-  }
-
-  function propagateDown(rowIdx: number) {
-    if (rowIdx >= years.length - 1) return
-    const src = years[rowIdx]!
-    const updated = years.map((row, i) =>
-      i === rowIdx + 1
-        ? {
-            ...src,
-            yearIndex: i,
-          }
-        : row,
-    )
-    onChange(updated)
-  }
-
-  function getCellErrors(row: YearCapacityParams): CellError {
-    const errors: CellError = {}
-    if (row.constantBaseload > row.maxPowerConsumption) {
-      errors.baseloadTooHigh = true
-    }
-    if ((row.windCapacityMW + row.solarCapacityMW) > row.maxPowerConsumption * 3) {
-      errors.renewableRatioHigh = true
-    }
-    return errors
-  }
-
-  const numInputCls = (hasError: boolean, isWarning = false) =>
-    [
-      'w-full rounded border px-1.5 py-0.5 text-right text-xs focus:outline-none focus:ring-1',
-      hasError
-        ? isWarning
-          ? 'border-amber-400 bg-amber-50 focus:ring-amber-400'
-          : 'border-red-400 bg-red-50 focus:ring-red-400'
-        : 'border-gray-200 bg-white focus:ring-blue-400',
-    ].join(' ')
-
   return (
-    <div className="overflow-x-auto rounded border border-gray-200">
-      <table className="min-w-full text-xs">
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs">
         <thead>
           <tr className="border-b border-gray-200 bg-gray-50">
-            <th className="px-3 py-2 text-left font-semibold text-gray-700 whitespace-nowrap">Year</th>
-            <th className="px-2 py-2 text-right font-semibold text-gray-700 whitespace-nowrap">
-              Max Consumption (MW)
-            </th>
-            <th className="px-2 py-2 text-right font-semibold text-gray-700 whitespace-nowrap">
-              Constant Baseload (MW)
-            </th>
-            <th className="px-2 py-2 text-right font-semibold text-gray-700 whitespace-nowrap">
-              Solar (MW)
-            </th>
-            <th className="px-2 py-2 text-right font-semibold text-gray-700 whitespace-nowrap">
-              Wind (MW)
-            </th>
-            <th className="px-2 py-2 text-right font-semibold text-gray-700 whitespace-nowrap">
-              Nuclear (MW)
-            </th>
-            <th className="px-2 py-2 text-center font-semibold text-gray-700 whitespace-nowrap">
-              Randomizer
-            </th>
-            <th className="px-2 py-2 text-center font-semibold text-gray-700 whitespace-nowrap w-8"></th>
+            <th className="py-1.5 pl-3 pr-2 text-left font-semibold text-gray-600">Year</th>
+            <th className="py-1.5 px-2 text-right font-semibold text-gray-600">Max Consumption (MW)</th>
+            <th className="py-1.5 px-2 text-right font-semibold text-gray-600">Constant Baseload (MW)</th>
+            <th className="py-1.5 px-2 text-right font-semibold text-gray-600">Solar (MW)</th>
+            <th className="py-1.5 px-2 text-right font-semibold text-gray-600">Wind (MW)</th>
+            <th className="py-1.5 px-2 text-right font-semibold text-gray-600">Nuclear (MW)</th>
+            <th className="py-1.5 px-2 text-center font-semibold text-gray-600 w-36">Randomizer</th>
+            <th className="py-1.5 px-2 w-6"></th>
           </tr>
         </thead>
         <tbody>
-          {years.map((row, i) => {
-            const errors = getCellErrors(row)
-            const displayYear = BASE_YEAR + row.yearIndex
+          {rows.map((row, i) => {
+            const warnings = getRowWarnings(row)
+            const baseloadError = warnings.find((w) => w.field === 'constantBaseload')
+            const renewableWarn = warnings.find((w) => w.field === 'renewables')
             return (
-              <tr key={row.yearIndex} className="border-b border-gray-100 last:border-0 hover:bg-gray-50/60">
-                <td className="px-3 py-1.5 font-semibold text-gray-700">{displayYear}</td>
-
-                {/* Max Consumption */}
-                <td className="px-2 py-1.5">
-                  <input
-                    type="number"
-                    value={row.maxPowerConsumption}
-                    min={1000}
-                    max={50000}
-                    step={100}
-                    onChange={(e) => updateRow(i, 'maxPowerConsumption', Number(e.target.value))}
-                    className={numInputCls(false)}
-                  />
+              <tr key={row.yearIndex} className="border-b border-gray-100 hover:bg-gray-50">
+                <td className="py-1 pl-3 pr-2 font-semibold text-gray-700">{YEAR_LABELS[i]}</td>
+                <td className="py-1 px-2">
+                  <div className="flex justify-end">
+                    <NumInput
+                      value={row.maxPowerConsumption}
+                      onChange={(v) => onUpdate(i, 'maxPowerConsumption', v)}
+                    />
+                  </div>
                 </td>
-
-                {/* Constant Baseload */}
-                <td className="px-2 py-1.5 relative group">
-                  <input
-                    type="number"
-                    value={row.constantBaseload}
-                    min={0}
-                    max={50000}
-                    step={100}
-                    onChange={(e) => updateRow(i, 'constantBaseload', Number(e.target.value))}
-                    className={numInputCls(errors.baseloadTooHigh === true)}
-                  />
-                  {errors.baseloadTooHigh && (
-                    <span className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 -translate-x-1/2 whitespace-nowrap rounded bg-red-700 px-2 py-1 text-[10px] text-white opacity-0 group-hover:opacity-100 transition-opacity">
-                      Cannot exceed max consumption
-                    </span>
-                  )}
+                <td className="py-1 px-2">
+                  <div className="flex justify-end">
+                    <NumInput
+                      value={row.constantBaseload}
+                      onChange={(v) => onUpdate(i, 'constantBaseload', v)}
+                      highlight={baseloadError ? 'error' : null}
+                      title={baseloadError?.message}
+                    />
+                  </div>
                 </td>
-
-                {/* Solar */}
-                <td className="px-2 py-1.5 relative group">
-                  <input
-                    type="number"
-                    value={row.solarCapacityMW}
-                    min={0}
-                    max={50000}
-                    step={100}
-                    onChange={(e) => updateRow(i, 'solarCapacityMW', Number(e.target.value))}
-                    className={numInputCls(errors.renewableRatioHigh === true, true)}
-                  />
-                  {errors.renewableRatioHigh && (
-                    <span className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 -translate-x-1/2 whitespace-nowrap rounded bg-amber-700 px-2 py-1 text-[10px] text-white opacity-0 group-hover:opacity-100 transition-opacity">
-                      High negative-price probability (&gt;300% capacity ratio)
-                    </span>
-                  )}
+                <td className="py-1 px-2">
+                  <div className="flex justify-end">
+                    <NumInput
+                      value={row.solarCapacityMW}
+                      onChange={(v) => onUpdate(i, 'solarCapacityMW', v)}
+                      highlight={renewableWarn ? 'warning' : null}
+                      title={renewableWarn?.message}
+                    />
+                  </div>
                 </td>
-
-                {/* Wind */}
-                <td className="px-2 py-1.5 relative group">
-                  <input
-                    type="number"
-                    value={row.windCapacityMW}
-                    min={0}
-                    max={50000}
-                    step={100}
-                    onChange={(e) => updateRow(i, 'windCapacityMW', Number(e.target.value))}
-                    className={numInputCls(errors.renewableRatioHigh === true, true)}
-                  />
-                  {errors.renewableRatioHigh && (
-                    <span className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 -translate-x-1/2 whitespace-nowrap rounded bg-amber-700 px-2 py-1 text-[10px] text-white opacity-0 group-hover:opacity-100 transition-opacity">
-                      High negative-price probability (&gt;300% capacity ratio)
-                    </span>
-                  )}
+                <td className="py-1 px-2">
+                  <div className="flex justify-end">
+                    <NumInput
+                      value={row.windCapacityMW}
+                      onChange={(v) => onUpdate(i, 'windCapacityMW', v)}
+                      highlight={renewableWarn ? 'warning' : null}
+                      title={renewableWarn?.message}
+                    />
+                  </div>
                 </td>
-
-                {/* Nuclear */}
-                <td className="px-2 py-1.5">
-                  <input
-                    type="number"
-                    value={row.nuclearCapacityMW}
-                    min={0}
-                    max={20000}
-                    step={100}
-                    onChange={(e) => updateRow(i, 'nuclearCapacityMW', Number(e.target.value))}
-                    className={numInputCls(false)}
-                  />
+                <td className="py-1 px-2">
+                  <div className="flex justify-end">
+                    <NumInput
+                      value={row.nuclearCapacityMW}
+                      onChange={(v) => onUpdate(i, 'nuclearCapacityMW', v)}
+                    />
+                  </div>
                 </td>
-
-                {/* Randomizer */}
-                <td className="px-2 py-1.5">
-                  <div className="flex items-center gap-1.5">
+                <td className="py-1 px-2">
+                  <div className="flex items-center gap-1.5 justify-center">
                     <input
                       type="range"
                       min={-0.2}
                       max={0.2}
                       step={0.01}
                       value={row.priceRandomizer}
-                      onChange={(e) => updateRow(i, 'priceRandomizer', Number(e.target.value))}
-                      className="w-20"
+                      onChange={(e) => onUpdate(i, 'priceRandomizer', parseFloat(e.target.value))}
+                      className="w-20 h-1.5 accent-blue-600"
                     />
-                    <span className="w-10 text-right text-gray-500">
+                    <span className="w-10 text-right text-gray-600 font-mono">
                       {row.priceRandomizer >= 0 ? '+' : ''}
                       {(row.priceRandomizer * 100).toFixed(0)}%
                     </span>
                   </div>
                 </td>
-
-                {/* Propagate button */}
-                <td className="px-2 py-1.5 text-center">
-                  {i < years.length - 1 && (
+                <td className="py-1 px-2">
+                  {i < rows.length - 1 && (
                     <button
                       type="button"
-                      onClick={() => propagateDown(i)}
-                      title="Copy this row to the row below"
-                      className="rounded border border-gray-200 px-1.5 py-0.5 text-[10px] text-gray-500 hover:border-blue-400 hover:text-blue-600 transition-colors"
+                      onClick={() => onPropagate(i)}
+                      title="Propagate values to next year"
+                      className="rounded px-1.5 py-0.5 text-gray-400 hover:bg-gray-100 hover:text-gray-700 text-[10px]"
                     >
                       ↓
                     </button>
@@ -735,18 +583,72 @@ function ScenarioEditorTable({
   )
 }
 
+// ─── Save As Modal ────────────────────────────────────────────────────────────
+
+function SaveAsModal({
+  onConfirm,
+  onCancel,
+}: {
+  onConfirm: (name: string, description: string) => void
+  onCancel: () => void
+}) {
+  const [name, setName] = useState('')
+  const [desc, setDesc] = useState('')
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="w-96 rounded-lg border border-gray-200 bg-white p-5 shadow-xl">
+        <h3 className="mb-4 text-sm font-semibold text-gray-800">Save Scenario As...</h3>
+        <label className="mb-1 block text-xs font-medium text-gray-600">Name</label>
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="My custom scenario"
+          className="mb-3 w-full rounded border border-gray-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
+          autoFocus
+        />
+        <label className="mb-1 block text-xs font-medium text-gray-600">Description (optional)</label>
+        <textarea
+          value={desc}
+          onChange={(e) => setDesc(e.target.value)}
+          rows={2}
+          placeholder="Brief description of this scenario..."
+          className="mb-4 w-full rounded border border-gray-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
+        />
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded border border-gray-300 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={!name.trim()}
+            onClick={() => onConfirm(name.trim(), desc.trim())}
+            className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40"
+          >
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Main ScenariosView ───────────────────────────────────────────────────────
 
 export default function ScenariosView() {
   const [series, setSeries] = useState<PriceSeries | null>(null)
-  const [customScenarios, setCustomScenarios] = useState<ScenarioProfile[]>(() => loadCustomScenarios())
-  const [activeProfileId, setActiveProfileId] = useState<string>(PRESET_SCENARIOS[0]!.id)
-  const [editingYears, setEditingYears] = useState<YearCapacityParams[]>(() =>
-    PRESET_SCENARIOS[0]!.years.map((y) => ({ ...y })),
-  )
-  const [baselineYears, setBaselineYears] = useState<YearCapacityParams[]>(() =>
-    PRESET_SCENARIOS[0]!.years.map((y) => ({ ...y })),
-  )
+  const [tableRows, setTableRows] = useState<YearCapacityParams[]>(() => getDefaultProfile().years)
+  const [baselineJson, setBaselineJson] = useState<string>(() => JSON.stringify(getDefaultProfile().years))
+  const [activeMeta, setActiveMeta] = useState<Omit<ScenarioProfile, 'years'>>(() => {
+    const p = getDefaultProfile()
+    return { id: p.id, name: p.name, description: p.description, isPreset: p.isPreset, updatedAt: p.updatedAt }
+  })
+  const [customProfiles, setCustomProfiles] = useState<ScenarioProfile[]>(loadCustomProfiles)
   const [seed, setSeed] = useState(42)
   const [output, setOutput] = useState<MultiYearForecastOutput | null>(null)
   const [running, setRunning] = useState(false)
@@ -755,6 +657,7 @@ export default function ScenariosView() {
   const [showSaveAs, setShowSaveAs] = useState(false)
 
   const chartInstanceRef = useRef<ECharts | null>(null)
+  const importInputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     fetch('/data/fi-prices.json')
@@ -763,119 +666,97 @@ export default function ScenariosView() {
       .catch(() => {})
   }, [])
 
-  const allProfiles: ScenarioProfile[] = useMemo(
-    () => [...PRESET_SCENARIOS, ...customScenarios],
-    [customScenarios],
-  )
+  const isDirty = JSON.stringify(tableRows) !== baselineJson
+  const allProfiles: ScenarioProfile[] = [...PRESET_SCENARIOS, ...customProfiles]
 
-  const activeProfile = useMemo(
-    () => allProfiles.find((p) => p.id === activeProfileId) ?? PRESET_SCENARIOS[0]!,
-    [allProfiles, activeProfileId],
-  )
+  const loadProfile = useCallback((profile: ScenarioProfile) => {
+    setTableRows([...profile.years])
+    setBaselineJson(JSON.stringify(profile.years))
+    setActiveMeta({ id: profile.id, name: profile.name, description: profile.description, isPreset: profile.isPreset, updatedAt: profile.updatedAt })
+  }, [])
 
-  const isDirty = useMemo(
-    () => !profilesAreEqual(editingYears, baselineYears),
-    [editingYears, baselineYears],
-  )
+  function updateRow(rowIdx: number, field: keyof Omit<YearCapacityParams, 'yearIndex'>, value: number) {
+    setTableRows((prev) => {
+      const next = [...prev]
+      next[rowIdx] = { ...next[rowIdx]!, [field]: value }
+      return next
+    })
+  }
 
-  const handleSelectProfile = useCallback(
-    (id: string) => {
-      const profile = allProfiles.find((p) => p.id === id) ?? PRESET_SCENARIOS[0]!
-      setActiveProfileId(id)
-      const copy = profile.years.map((y) => ({ ...y }))
-      setEditingYears(copy)
-      setBaselineYears(copy.map((y) => ({ ...y })))
-      setOutput(null)
-    },
-    [allProfiles],
-  )
+  function propagateRow(rowIdx: number) {
+    setTableRows((prev) => {
+      const next = [...prev]
+      if (rowIdx < next.length - 1) {
+        next[rowIdx + 1] = { ...next[rowIdx]!, yearIndex: rowIdx + 1 }
+      }
+      return next
+    })
+  }
 
   function handleSave() {
-    if (activeProfile.isPreset || !isDirty) return
-    const updated: ScenarioProfile = {
-      ...activeProfile,
-      years: editingYears,
-      updatedAt: new Date().toISOString(),
-    }
-    saveCustomScenario(updated)
-    setCustomScenarios(loadCustomScenarios())
-    setBaselineYears(editingYears.map((y) => ({ ...y })))
+    if (activeMeta.isPreset) return
+    const updated: ScenarioProfile = { ...activeMeta, years: tableRows, updatedAt: new Date().toISOString() }
+    saveCustomProfile(updated)
+    setCustomProfiles((prev) => prev.map((p) => (p.id === activeMeta.id ? updated : p)))
+    setBaselineJson(JSON.stringify(tableRows))
+    setActiveMeta((prev) => ({ ...prev, updatedAt: updated.updatedAt }))
   }
 
   function handleSaveAs(name: string, description: string) {
-    const newId = typeof crypto !== 'undefined' && crypto.randomUUID
-      ? crypto.randomUUID()
-      : Date.now().toString()
+    const id = Date.now().toString()
     const newProfile: ScenarioProfile = {
-      id: newId,
-      name,
-      description,
-      isPreset: false,
+      id, name, description, isPreset: false,
       updatedAt: new Date().toISOString(),
-      years: editingYears.map((y) => ({ ...y })),
+      years: tableRows,
     }
-    saveCustomScenario(newProfile)
-    const reloaded = loadCustomScenarios()
-    setCustomScenarios(reloaded)
-    setActiveProfileId(newId)
-    setBaselineYears(editingYears.map((y) => ({ ...y })))
+    saveCustomProfile(newProfile)
+    setCustomProfiles((prev) => [...prev, newProfile])
+    setBaselineJson(JSON.stringify(tableRows))
+    setActiveMeta({ id, name, description, isPreset: false, updatedAt: newProfile.updatedAt })
     setShowSaveAs(false)
   }
 
-  function handleExportJson() {
-    const exportProfile: ScenarioProfile = {
-      ...activeProfile,
-      years: editingYears,
-    }
-    const blob = new Blob([JSON.stringify(exportProfile, null, 2)], { type: 'application/json' })
+  function handleDelete() {
+    if (activeMeta.isPreset) return
+    deleteCustomProfile(activeMeta.id)
+    setCustomProfiles((prev) => prev.filter((p) => p.id !== activeMeta.id))
+    loadProfile(getDefaultProfile())
+  }
+
+  function handleExport() {
+    const profile: ScenarioProfile = { ...activeMeta, years: tableRows }
+    const blob = new Blob([JSON.stringify(profile, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `${activeProfile.name.replace(/\s+/g, '-').toLowerCase()}.json`
+    a.download = `${activeMeta.name.replace(/[^a-z0-9]/gi, '_')}.json`
     a.click()
     URL.revokeObjectURL(url)
   }
 
-  function handleImportJson(e: React.ChangeEvent<HTMLInputElement>) {
+  function handleImport(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
     const reader = new FileReader()
-    reader.onload = (ev) => {
+    reader.onload = (evt) => {
       try {
-        const parsed = JSON.parse(ev.target?.result as string) as ScenarioProfile
-        if (!parsed.id || !parsed.name || !Array.isArray(parsed.years)) {
-          alert('Invalid scenario file format.')
-          return
-        }
-        // If it was a preset, re-assign a new ID to store as custom
-        const importId = parsed.isPreset
-          ? (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString())
-          : parsed.id
-        const importProfile: ScenarioProfile = {
+        const parsed = JSON.parse(evt.target?.result as string) as ScenarioProfile
+        if (!parsed.years || !Array.isArray(parsed.years)) throw new Error('Invalid profile')
+        const imported: ScenarioProfile = {
           ...parsed,
-          id: importId,
+          id: Date.now().toString(),
           isPreset: false,
           updatedAt: new Date().toISOString(),
         }
-        saveCustomScenario(importProfile)
-        const reloaded = loadCustomScenarios()
-        setCustomScenarios(reloaded)
-        handleSelectProfile(importId)
+        saveCustomProfile(imported)
+        setCustomProfiles((prev) => [...prev, imported])
+        loadProfile(imported)
       } catch {
-        alert('Failed to parse JSON file.')
+        alert('Invalid or unrecognised scenario JSON file.')
       }
     }
     reader.readAsText(file)
-    // Reset file input
     e.target.value = ''
-  }
-
-  function handleDelete() {
-    if (activeProfile.isPreset) return
-    deleteCustomScenario(activeProfile.id)
-    const reloaded = loadCustomScenarios()
-    setCustomScenarios(reloaded)
-    handleSelectProfile(PRESET_SCENARIOS[0]!.id)
   }
 
   function handleRun() {
@@ -883,11 +764,8 @@ export default function ScenariosView() {
     setRunning(true)
     setTimeout(() => {
       try {
-        const profileToRun: ScenarioProfile = {
-          ...activeProfile,
-          years: editingYears,
-        }
-        const result = runForecast(series, profileToRun, seed)
+        const profile: ScenarioProfile = { ...activeMeta, years: tableRows }
+        const result = runForecast(series, profile, seed)
         setOutput(result)
         setSelectedEventId(null)
       } finally {
@@ -911,135 +789,125 @@ export default function ScenariosView() {
 
   const eventCounts = useMemo(() => {
     if (!output) return null
-    const counts: Record<string, number> = { structural_shift: 0, stochastic_outage: 0, dunkelflaute_shock: 0 }
+    const counts: Record<string, number> = { dunkelflaute_shock: 0, stochastic_outage: 0, structural_shift: 0 }
     for (const ev of output.events) counts[ev.type] = (counts[ev.type] ?? 0) + 1
     return counts
   }, [output])
 
   return (
-    <div className="flex flex-col gap-0 h-[calc(100vh-130px)]">
+    <div className="flex flex-col h-[calc(100vh-130px)]">
       {showSaveAs && (
-        <SaveAsModal
-          onConfirm={handleSaveAs}
-          onCancel={() => setShowSaveAs(false)}
-        />
+        <SaveAsModal onConfirm={handleSaveAs} onCancel={() => setShowSaveAs(false)} />
       )}
 
-      {/* ── Header Toolbar ── */}
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-gray-200 px-4 py-2.5">
-        <h2 className="text-base font-semibold">Scenarios</h2>
+      {/* ── Header toolbar ── */}
+      <div className="shrink-0 flex items-center gap-2 border-b border-gray-200 px-4 py-2 flex-wrap">
+        <h2 className="text-base font-semibold mr-1">Scenarios</h2>
 
-        {/* Profile dropdown + dirty indicator */}
-        <div className="flex items-center gap-1">
-          {isDirty && (
-            <span className="h-2 w-2 rounded-full bg-orange-400" title="Unsaved changes" />
-          )}
+        {/* Profile selector */}
+        <div className="flex items-center gap-1.5">
           <select
-            value={activeProfileId}
-            onChange={(e) => handleSelectProfile(e.target.value)}
-            className="rounded border border-gray-300 px-2 py-1 text-sm text-gray-800 focus:border-blue-500 focus:outline-none"
+            value={activeMeta.id}
+            onChange={(e) => {
+              const found = allProfiles.find((p) => p.id === e.target.value)
+              if (found) loadProfile(found)
+            }}
+            className="rounded border border-gray-300 px-2 py-1 text-xs"
           >
             <optgroup label="Presets">
               {PRESET_SCENARIOS.map((p) => (
                 <option key={p.id} value={p.id}>{p.name} (Preset)</option>
               ))}
             </optgroup>
-            {customScenarios.length > 0 && (
-              <optgroup label="Custom">
-                {customScenarios.map((p) => (
+            {customProfiles.length > 0 && (
+              <optgroup label="Saved">
+                {customProfiles.map((p) => (
                   <option key={p.id} value={p.id}>{p.name}</option>
                 ))}
               </optgroup>
             )}
           </select>
+          {isDirty && (
+            <span title="Unsaved changes" className="h-2 w-2 rounded-full bg-orange-400 shrink-0" />
+          )}
         </div>
 
-        {/* Action buttons */}
-        <button
-          type="button"
-          onClick={handleSave}
-          disabled={activeProfile.isPreset || !isDirty}
-          className="rounded border border-gray-300 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40"
-          title={activeProfile.isPreset ? 'Cannot overwrite a preset — use Save As...' : 'Save changes'}
-        >
-          Save
-        </button>
-        <button
-          type="button"
-          onClick={() => setShowSaveAs(true)}
-          className="rounded border border-gray-300 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
-        >
-          Save As...
-        </button>
-        <button
-          type="button"
-          onClick={handleExportJson}
-          className="rounded border border-gray-300 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
-        >
-          Export JSON
-        </button>
-        <label className="cursor-pointer rounded border border-gray-300 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50">
-          Import JSON
-          <input type="file" accept=".json" className="hidden" onChange={handleImportJson} />
-        </label>
-        <button
-          type="button"
-          onClick={handleDelete}
-          disabled={activeProfile.isPreset}
-          className="rounded border border-red-200 px-2.5 py-1 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-40"
-          title={activeProfile.isPreset ? 'Cannot delete a preset' : 'Delete this scenario'}
-        >
-          Delete
-        </button>
-
-        <div className="mx-1 h-5 border-l border-gray-200" />
-
-        {/* Seed */}
-        <div className="flex items-center gap-1.5">
-          <label className="text-xs text-gray-500">Seed</label>
-          <input
-            type="number"
-            value={seed}
-            min={1}
-            onChange={(e) => setSeed(parseInt(e.target.value) || 42)}
-            className="w-16 rounded border border-gray-300 px-2 py-0.5 text-sm"
-          />
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={activeMeta.isPreset || !isDirty}
+            className="rounded border border-gray-300 px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-40"
+          >
+            Save
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowSaveAs(true)}
+            className="rounded border border-gray-300 px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-50"
+          >
+            Save As...
+          </button>
+          <button
+            type="button"
+            onClick={handleExport}
+            className="rounded border border-gray-300 px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-50"
+          >
+            Export JSON
+          </button>
+          <label className="cursor-pointer rounded border border-gray-300 px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-50">
+            Import JSON
+            <input
+              ref={importInputRef}
+              type="file"
+              accept=".json"
+              onChange={handleImport}
+              className="hidden"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={handleDelete}
+            disabled={activeMeta.isPreset}
+            className="rounded border border-red-200 px-2.5 py-1 text-xs text-red-600 hover:bg-red-50 disabled:opacity-40"
+          >
+            Delete
+          </button>
         </div>
 
-        {/* Generate button */}
-        <button
-          type="button"
-          onClick={handleRun}
-          disabled={!series || running}
-          className="rounded bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40"
-        >
-          {running ? 'Generating...' : 'Generate Forecast'}
-        </button>
-
-        {!series && <span className="text-xs text-gray-400">Waiting for price data...</span>}
-
-        {eventCounts && (
-          <div className="ml-auto flex gap-3 text-xs text-gray-500">
-            <span>
-              <span className="font-medium text-orange-600">{eventCounts['dunkelflaute_shock']}</span> dunkelflaute
-            </span>
-            <span>
-              <span className="font-medium text-red-600">{eventCounts['stochastic_outage']}</span> outages
-            </span>
+        <div className="ml-auto flex items-center gap-2">
+          <span className="text-xs text-gray-400">5-year horizon (2026–2030)</span>
+          <div className="flex items-center gap-1">
+            <label className="text-xs text-gray-500">Seed</label>
+            <input
+              type="number"
+              value={seed}
+              min={1}
+              onChange={(e) => setSeed(parseInt(e.target.value) || 42)}
+              className="w-16 rounded border border-gray-300 px-2 py-0.5 text-sm"
+            />
           </div>
-        )}
+          <button
+            type="button"
+            onClick={handleRun}
+            disabled={!series || running}
+            className="rounded bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40"
+          >
+            {running ? 'Generating...' : 'Generate forecast'}
+          </button>
+          {!series && <span className="text-xs text-gray-400">Loading data...</span>}
+        </div>
       </div>
 
       {/* ── Scenario description ── */}
-      <div className="shrink-0 border-b border-gray-100 bg-gray-50 px-4 py-2 text-xs text-gray-600">
-        <span className="font-medium text-gray-800">{activeProfile.name}: </span>
-        {activeProfile.description}
-        <span className="ml-3 text-gray-400">5-year horizon (2026–2030)</span>
+      <div className="shrink-0 border-b border-gray-100 bg-gray-50 px-4 py-1.5 text-xs text-gray-600">
+        <span className="font-medium text-gray-800">{activeMeta.name}: </span>
+        {activeMeta.description}
       </div>
 
       {/* ── Scenario Editor Table ── */}
-      <div className="shrink-0 border-b border-gray-200 bg-white px-4 py-3">
-        <ScenarioEditorTable years={editingYears} onChange={setEditingYears} />
+      <div className="shrink-0 border-b border-gray-200">
+        <ScenarioTable rows={tableRows} onUpdate={updateRow} onPropagate={propagateRow} />
       </div>
 
       {/* ── Tab bar ── */}
@@ -1050,14 +918,25 @@ export default function ScenariosView() {
             onClick={() => setActiveTab(t)}
             className={[
               'px-5 py-2 text-sm font-medium',
-              activeTab === t
-                ? 'border-b-2 border-blue-600 text-blue-600'
-                : 'text-gray-500 hover:text-black',
+              activeTab === t ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500 hover:text-black',
             ].join(' ')}
           >
             {t === 'forecast' ? 'Forecast' : 'Backtest'}
           </button>
         ))}
+        {eventCounts && (
+          <div className="ml-auto flex items-center gap-3 px-4 text-xs text-gray-500">
+            <span>
+              <span className="font-medium text-orange-600">{eventCounts['dunkelflaute_shock']}</span> dunkelflaute
+            </span>
+            <span>
+              <span className="font-medium text-red-600">{eventCounts['stochastic_outage']}</span> outages
+            </span>
+            <span>
+              <span className="font-medium text-green-700">{eventCounts['structural_shift']}</span> structural
+            </span>
+          </div>
+        )}
       </div>
 
       {/* ── Main content ── */}
@@ -1072,21 +951,19 @@ export default function ScenariosView() {
           </div>
         ) : !output ? (
           <div className="flex h-full items-center justify-center text-sm text-gray-400">
-            Edit the capacity table above and press Generate Forecast.
+            Configure the scenario table above and press Generate forecast.
           </div>
         ) : (
           <div className="flex h-full">
-            {/* ── Price chart (75%) ── */}
+            {/* Price chart (75%) */}
             <div className="min-w-0 flex-[3] overflow-hidden border-r border-gray-200 p-3">
               <ForecastChart
                 output={output}
-                onChartReady={(instance) => {
-                  chartInstanceRef.current = instance
-                }}
+                onChartReady={(instance) => { chartInstanceRef.current = instance }}
               />
             </div>
 
-            {/* ── Event ledger (25%) ── */}
+            {/* Event ledger (25%) */}
             <div className="w-72 shrink-0 flex flex-col overflow-hidden">
               <div className="shrink-0 border-b border-gray-200 px-3 py-2">
                 <p className="text-xs font-semibold text-gray-700">
