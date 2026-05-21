@@ -1,1 +1,1 @@
-{"root":["./src/test-setup.ts","./src/app/app.test.tsx","./src/app/app.tsx","./src/app/main.tsx","./src/core/types/index.ts"],"version":"5.9.3"}
+{"root":["./src/test-setup.ts","./src/app/app.test.tsx","./src/app/app.tsx","./src/app/main.tsx","./src/core/stats/extractor.test.ts","./src/core/stats/extractor.ts","./src/core/stats/math.ts","./src/core/stats/types.ts","./src/core/types/battery.ts","./src/core/types/index.ts","./src/core/types/prices.ts","./src/features/historical/historicalview.tsx","./src/ui/sliderinput.tsx"],"version":"5.9.3"}

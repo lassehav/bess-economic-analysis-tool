@@ -1,3 +1,6 @@
+import { useState } from 'react'
+import HistoricalView from '../features/historical/HistoricalView'
+
 const TABS = [
   { id: 'historical', label: 'Historical Data' },
   { id: 'parameters', label: 'Parameters' },
@@ -9,8 +12,6 @@ const TABS = [
 ] as const
 
 type TabId = (typeof TABS)[number]['id']
-
-import { useState } from 'react'
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabId>('historical')
@@ -43,11 +44,15 @@ export default function App() {
         </div>
       </nav>
 
-      <main className="p-6">
-        <div className="rounded-lg border border-gray-200 p-8 text-center text-gray-400">
-          <p className="text-lg font-medium text-black">{TABS.find((t) => t.id === activeTab)?.label}</p>
-          <p className="mt-2 text-sm">This section will be implemented in a later phase.</p>
-        </div>
+      <main className={activeTab === 'historical' ? 'px-6 pb-6 pt-4' : 'p-6'}>
+        {activeTab === 'historical' ? (
+          <HistoricalView />
+        ) : (
+          <div className="rounded-lg border border-gray-200 p-8 text-center text-gray-400">
+            <p className="text-lg font-medium text-black">{TABS.find((t) => t.id === activeTab)?.label}</p>
+            <p className="mt-2 text-sm">This section will be implemented in a later phase.</p>
+          </div>
+        )}
       </main>
     </div>
   )
