@@ -329,19 +329,31 @@ function DayPriceChart({ dayStats }: { dayStats: DailyStats }) {
 function SocTraceChart({ dayStats, battery }: { dayStats: DailyStats; battery: BatterySpec }) {
   const option = useMemo(() => {
     const pts = dayStats.socTrace
+    console.log(pts)
 
     // Build segments by mode
     type Segment = { mode: SocTracePoint['mode']; data: [number, number][] }
     const segments: Segment[] = []
     let cur: Segment | null = null
+    let prevPt: SocTracePoint | null = null
 
     for (const pt of pts) {
       if (!cur || cur.mode !== pt.mode) {
         if (cur) segments.push(cur)
-        cur = { mode: pt.mode, data: [[pt.hourIndex, pt.socPct]] }
+        
+        const data: [number, number][] = []
+        // CRUCIAL FIX: Inject the trailing point of the previous mode 
+        // to act as the starting anchor for the new line segment series.
+        if (prevPt) {
+          data.push([prevPt.hourIndex, prevPt.socPct])
+        }
+        data.push([pt.hourIndex, pt.socPct])
+        
+        cur = { mode: pt.mode, data }
       } else {
         cur.data.push([pt.hourIndex, pt.socPct])
       }
+      prevPt = pt
     }
     if (cur) segments.push(cur)
 
@@ -351,14 +363,15 @@ function SocTraceChart({ dayStats, battery }: { dayStats: DailyStats; battery: B
       idle: '#9ca3af',
     }
 
-    // Overlap: connect segments with a ghost series for continuity
-    // Actually build one series per segment with its color
+    // Map segments to individual ECharts line series
     const series: unknown[] = segments.map((seg) => ({
       type: 'line',
       data: seg.data,
       lineStyle: { color: colorMap[seg.mode], width: 2 },
       itemStyle: { color: colorMap[seg.mode] },
       showSymbol: false,
+      // Connect endpoints smoothly without adding empty break breaks
+      connectNulls: true, 
       markLine:
         seg === segments[0]
           ? {
@@ -392,8 +405,15 @@ function SocTraceChart({ dayStats, battery }: { dayStats: DailyStats; battery: B
     }
 
     return {
-      tooltip: { trigger: 'axis', formatter: (p: { value: [number, number] }[]) =>
-        p.map((pp) => `Hour ${pp.value[0]}: ${pp.value[1].toFixed(1)}%`).join('<br/>')
+      tooltip: { 
+        trigger: 'axis', 
+        formatter: (p: { value: [number, number] }[]) => {
+          if (!p.length || !p[0]) return ''
+          // Grabbing the first matched series item prevents duplicate text items 
+          // in the tooltip layout caused by our single-point segment overlap.
+          const val = p[0].value
+          return `Hour ${val[0]}: ${val[1].toFixed(1)}%`
+        }
       },
       xAxis: { type: 'value', name: 'Hour', min: 0, max: pts.length - 1 },
       yAxis: { type: 'value', name: 'SoC %', min: 0, max: 105 },
@@ -402,7 +422,7 @@ function SocTraceChart({ dayStats, battery }: { dayStats: DailyStats; battery: B
     }
   }, [dayStats, battery])
 
-  return <ReactECharts option={option} style={{ height: 260 }} />
+  return <ReactECharts option={option} notMerge style={{ height: 260 }} />
 }
 
 // ─── Day Inspection — Side panel ─────────────────────────────────────────────
@@ -455,6 +475,7 @@ export default function HistoricalView() {
   const [error, setError] = useState<string | null>(null)
 
   const [battery, setBattery] = useState<BatterySpec>(DEFAULT_BATTERY)
+  const [mdc, setMdc] = useState(0)
   const [periodType, setPeriodType] = useState<PeriodType>('year')
   const [periodKey, setPeriodKey] = useState<PeriodKey>('2024')
   const [selectedDate, setSelectedDate] = useState<string>('2024-01-15')
@@ -469,10 +490,16 @@ export default function HistoricalView() {
       })
       .then((data) => {
         setSeries(data)
-        // Set default period to first available year
-        const { minDate } = getDateRange(data)
-        setPeriodKey(minDate.slice(0, 4))
-        setSelectedDate(minDate)
+        // Advance to first full UTC day (startUtc may be mid-day, e.g. 22:00 UTC on Dec 31)
+        const startDate = new Date(data.startUtc)
+        const firstFullDay =
+          startDate.getUTCHours() === 0
+            ? data.startUtc.slice(0, 10)
+            : new Date(
+                startDate.getTime() + (24 - startDate.getUTCHours()) * 3_600_000,
+              ).toISOString().slice(0, 10)
+        setPeriodKey(firstFullDay.slice(0, 4))
+        setSelectedDate(firstFullDay)
       })
       .catch((e: unknown) => setError(String(e)))
       .finally(() => setLoading(false))
@@ -485,9 +512,9 @@ export default function HistoricalView() {
     return dates.flatMap((date) => {
       const day = getDayPrices(series, date)
       if (!day) return []
-      return [extractDailyStats(day.prices, day.dayStartUtc, battery)]
+      return [extractDailyStats(day.prices, day.dayStartUtc, battery, mdc)]
     })
-  }, [series, periodType, periodKey, battery])
+  }, [series, periodType, periodKey, battery, mdc])
 
   // Available period options
   const periodOptions = useMemo(() => {
@@ -500,8 +527,8 @@ export default function HistoricalView() {
     if (!series) return null
     const day = getDayPrices(series, selectedDate)
     if (!day) return null
-    return extractDailyStats(day.prices, day.dayStartUtc, battery)
-  }, [series, selectedDate, battery])
+    return extractDailyStats(day.prices, day.dayStartUtc, battery, mdc)
+  }, [series, selectedDate, battery, mdc])
 
   const D = battery.energyMWh / battery.powerMW
 
@@ -597,6 +624,16 @@ export default function HistoricalView() {
           step={1}
         />
 
+        <SliderInput
+          label="Marginal Degradation Cost"
+          unit="€/MWh"
+          value={mdc}
+          onChange={setMdc}
+          min={0}
+          max={100}
+          step={0.5}
+        />
+
         <hr className="border-gray-200" />
         <h2 className="text-sm font-semibold">Period</h2>
 
@@ -635,13 +672,40 @@ export default function HistoricalView() {
 
         <div>
           <label className="mb-1 block text-xs font-medium text-gray-700">Inspect day (UTC)</label>
-          <input
-            type="text"
-            value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)}
-            placeholder="YYYY-MM-DD"
-            className="w-full rounded border border-gray-300 px-2 py-1 text-sm"
-          />
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => {
+                const d = new Date(selectedDate + 'T00:00:00.000Z')
+                d.setUTCDate(d.getUTCDate() - 1)
+                const s = d.toISOString().slice(0, 10)
+                if (s >= getDateRange(series).minDate) setSelectedDate(s)
+              }}
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-gray-300 text-gray-600 hover:border-gray-400 hover:text-black"
+              title="Previous day"
+            >
+              ‹
+            </button>
+            <input
+              type="date"
+              value={selectedDate}
+              min={getDateRange(series).minDate}
+              max={getDateRange(series).maxDate}
+              onChange={(e) => { if (e.target.value) setSelectedDate(e.target.value) }}
+              className="min-w-0 flex-1 rounded border border-gray-300 px-2 py-1 text-sm"
+            />
+            <button
+              onClick={() => {
+                const d = new Date(selectedDate + 'T00:00:00.000Z')
+                d.setUTCDate(d.getUTCDate() + 1)
+                const s = d.toISOString().slice(0, 10)
+                if (s <= getDateRange(series).maxDate) setSelectedDate(s)
+              }}
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded border border-gray-300 text-gray-600 hover:border-gray-400 hover:text-black"
+              title="Next day"
+            >
+              ›
+            </button>
+          </div>
         </div>
       </aside>
 
