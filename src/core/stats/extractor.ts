@@ -1,5 +1,5 @@
 import type { BatterySpec } from '../types/battery'
-import type { DailyStats, SocTracePoint, Window } from './types'
+import type { DailyStats, PeriodAggregateStats, SocTracePoint, Window } from './types'
 
 function hourIndexToUtc(dayStartUtc: string, hourIndex: number): string {
   const ms = new Date(dayStartUtc).getTime() + hourIndex * 3_600_000
@@ -160,6 +160,33 @@ export function extractDailyStats(
     })
   }
 
+  // ── 3b. ENFORCE maxCyclesPerDay WINDOW LIMIT ──────────────────────────────
+  // The fractional dispatch engine may produce more distinct charge→discharge
+  // groups than maxCyclesPerDay because the throughput budget (in MWh) allows
+  // many small independent pairs that reconstruct into N > maxCyclesPerDay
+  // windows.  Prune to the top N most profitable and zero out their dispatch
+  // allocations so the SoC trace reflects only the kept cycles.
+  if (finalWindows.length > battery.maxCyclesPerDay) {
+    const ranked = finalWindows
+      .map((w) => ({ w, profit: w.effectiveMargin * w.effectiveEnergyMWh }))
+      .sort((a, b) => b.profit - a.profit)
+
+    for (const { w } of ranked.slice(battery.maxCyclesPerDay)) {
+      for (const h of w.chargeHourIndices) gridChargeMW[h] = 0
+      for (const h of w.dischargeHourIndices) gridDischargeMW[h] = 0
+    }
+
+    finalWindows.length = 0
+    for (const { w } of ranked.slice(0, battery.maxCyclesPerDay)) {
+      finalWindows.push(w)
+    }
+    finalWindows.sort(
+      (a, b) =>
+        (a.chargeHourIndices[0] ?? a.dischargeHourIndices[0] ?? 0) -
+        (b.chargeHourIndices[0] ?? b.dischargeHourIndices[0] ?? 0),
+    )
+  }
+
   // ── 4. CHRONOLOGICAL TRACE FOR THE CHARTS ────────────────────────────────
   const socTrace: SocTracePoint[] = []
   let traceSoc = battery.initialSocMWh ?? 0
@@ -211,5 +238,102 @@ export function extractDailyStats(
     windows: finalWindows,
     socTrace,
     warnings,
+  }
+}
+
+export function aggregatePeriod(daily: DailyStats[], periodKey: string): PeriodAggregateStats {
+  const n = daily.length
+
+  function avg(arr: number[]): number {
+    return arr.length > 0 ? arr.reduce((s, v) => s + v, 0) / arr.length : 0
+  }
+  function stdDev(arr: number[], m: number): number {
+    if (arr.length < 2) return 0
+    return Math.sqrt(arr.reduce((s, v) => s + (v - m) ** 2, 0) / (arr.length - 1))
+  }
+  function pct(sorted: number[], p: number): number {
+    if (sorted.length === 0) return 0
+    const idx = (p / 100) * (sorted.length - 1)
+    const lo = Math.floor(idx)
+    const hi = Math.ceil(idx)
+    return lo === hi ? (sorted[lo] ?? 0) : (sorted[lo] ?? 0) + ((sorted[hi] ?? 0) - (sorted[lo] ?? 0)) * (idx - lo)
+  }
+  function skew(arr: number[], m: number, s: number): number {
+    if (arr.length < 3 || s === 0) return 0
+    const k = arr.length
+    return (k / ((k - 1) * (k - 2))) * arr.reduce((acc, v) => acc + ((v - m) / s) ** 3, 0)
+  }
+
+  // Spread
+  const spreads = daily.map((d) => d.spread).sort((a, b) => a - b)
+  const spreadMean = avg(spreads)
+  const spreadStd = stdDev(spreads, spreadMean)
+
+  // Window counts
+  const wcounts = daily.map((d) => d.windows.length)
+  const histogram: Record<0 | 1 | 2 | 3, number> = { 0: 0, 1: 0, 2: 0, 3: 0 }
+  for (const wc of wcounts) histogram[Math.min(wc, 3) as 0 | 1 | 2 | 3]++
+  let modeKey: 0 | 1 | 2 | 3 = 0
+  let modeMax = -1
+  for (const [k, count] of Object.entries(histogram) as [string, number][]) {
+    if (count > modeMax) { modeMax = count; modeKey = Number(k) as 0 | 1 | 2 | 3 }
+  }
+
+  // Secondary / tertiary margin ratios (relative to primary cycle)
+  const secondaryRatios: number[] = []
+  const tertiaryRatios: number[] = []
+  for (const d of daily) {
+    const [w0, w1, w2] = d.windows
+    if (w0 && w1 && w0.effectiveMargin > 0) secondaryRatios.push(w1.effectiveMargin / w0.effectiveMargin)
+    if (w0 && w2 && w0.effectiveMargin > 0) tertiaryRatios.push(w2.effectiveMargin / w0.effectiveMargin)
+  }
+  const secMean = avg(secondaryRatios)
+  const terMean = avg(tertiaryRatios)
+
+  // Peak (discharge) duration
+  const durations: number[] = daily.flatMap((d) => d.windows.map((w) => w.dischargeHourIndices.length))
+  const durationsSorted = durations.slice().sort((a, b) => a - b)
+
+  // Price level and negative-hour share
+  let totalHours = 0, totalPriceSum = 0, totalNegHours = 0
+  for (const d of daily) {
+    totalHours += d.hourlyPrices.length
+    totalPriceSum += d.hourlyPrices.reduce((s, p) => s + p, 0)
+    totalNegHours += d.negativeHourCount
+  }
+
+  // Effective margin per cycle
+  const margins: number[] = daily.flatMap((d) => d.windows.map((w) => w.effectiveMargin))
+  const marginsSorted = margins.slice().sort((a, b) => a - b)
+  const marginMean = avg(margins)
+
+  return {
+    periodKey,
+    dayCount: n,
+    spread: {
+      mean: spreadMean,
+      std: spreadStd,
+      p10: pct(spreads, 10),
+      p50: pct(spreads, 50),
+      p90: pct(spreads, 90),
+      skewness: skew(spreads, spreadMean, spreadStd),
+    },
+    windowCount: { mean: avg(wcounts), mode: modeKey, histogram },
+    secondaryRatio: { mean: secMean, std: stdDev(secondaryRatios, secMean) },
+    tertiaryRatio: { mean: terMean, std: stdDev(tertiaryRatios, terMean) },
+    peakDurationHours: {
+      mean: avg(durations),
+      p10: pct(durationsSorted, 10),
+      p50: pct(durationsSorted, 50),
+      p90: pct(durationsSorted, 90),
+    },
+    meanLevel: totalHours > 0 ? totalPriceSum / totalHours : 0,
+    negativeHourShare: totalHours > 0 ? totalNegHours / totalHours : 0,
+    effectiveMarginPerCycle: {
+      mean: marginMean,
+      p10: pct(marginsSorted, 10),
+      p50: pct(marginsSorted, 50),
+      p90: pct(marginsSorted, 90),
+    },
   }
 }

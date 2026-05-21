@@ -4,7 +4,7 @@ import type { BatterySpec } from '../../core/types/battery'
 import type { PriceSeries } from '../../core/types/prices'
 import { getDayPrices } from '../../core/types/prices'
 import { extractDailyStats } from '../../core/stats/extractor'
-import type { DailyStats, SocTracePoint } from '../../core/stats/types'
+import type { DailyStats } from '../../core/stats/types'
 import SliderInput from '../../ui/SliderInput'
 
 // ─── Period types ─────────────────────────────────────────────────────────────
@@ -329,91 +329,65 @@ function DayPriceChart({ dayStats }: { dayStats: DailyStats }) {
 function SocTraceChart({ dayStats, battery }: { dayStats: DailyStats; battery: BatterySpec }) {
   const option = useMemo(() => {
     const pts = dayStats.socTrace
-    console.log(pts)
 
-    // Build segments by mode
-    type Segment = { mode: SocTracePoint['mode']; data: [number, number][] }
-    const segments: Segment[] = []
-    let cur: Segment | null = null
-    let prevPt: SocTracePoint | null = null
-
-    for (const pt of pts) {
-      if (!cur || cur.mode !== pt.mode) {
-        if (cur) segments.push(cur)
-        
-        const data: [number, number][] = []
-        // CRUCIAL FIX: Inject the trailing point of the previous mode 
-        // to act as the starting anchor for the new line segment series.
-        if (prevPt) {
-          data.push([prevPt.hourIndex, prevPt.socPct])
-        }
-        data.push([pt.hourIndex, pt.socPct])
-        
-        cur = { mode: pt.mode, data }
-      } else {
-        cur.data.push([pt.hourIndex, pt.socPct])
+    // Background shading from window blocks — green for charge, orange for discharge
+    const markAreaData: [object, object][] = []
+    for (const win of dayStats.windows) {
+      if (win.chargeHourIndices.length > 0) {
+        markAreaData.push([
+          { xAxis: Math.min(...win.chargeHourIndices), itemStyle: { color: 'rgba(34,197,94,0.15)' } },
+          { xAxis: Math.max(...win.chargeHourIndices) + 1 },
+        ])
       }
-      prevPt = pt
+      if (win.dischargeHourIndices.length > 0) {
+        markAreaData.push([
+          { xAxis: Math.min(...win.dischargeHourIndices), itemStyle: { color: 'rgba(234,88,12,0.15)' } },
+          { xAxis: Math.max(...win.dischargeHourIndices) + 1 },
+        ])
+      }
     }
-    if (cur) segments.push(cur)
-
-    const colorMap: Record<SocTracePoint['mode'], string> = {
-      charging: '#16a34a',
-      discharging: '#ea580c',
-      idle: '#9ca3af',
-    }
-
-    // Map segments to individual ECharts line series
-    const series: unknown[] = segments.map((seg) => ({
-      type: 'line',
-      data: seg.data,
-      lineStyle: { color: colorMap[seg.mode], width: 2 },
-      itemStyle: { color: colorMap[seg.mode] },
-      showSymbol: false,
-      // Connect endpoints smoothly without adding empty break breaks
-      connectNulls: true, 
-      markLine:
-        seg === segments[0]
-          ? {
-              data: [
-                { yAxis: 0, name: '0%', lineStyle: { color: '#ef4444', type: 'solid' } },
-                { yAxis: battery.dod * 100, name: `DoD ${(battery.dod * 100).toFixed(0)}%`, lineStyle: { color: '#ef4444', type: 'dashed' } },
-                { yAxis: 100, name: '100%', lineStyle: { color: '#9ca3af', type: 'dashed' } },
-              ],
-              symbol: 'none',
-              label: { show: true, position: 'end', fontSize: 10 },
-            }
-          : undefined,
-    }))
 
     // Warning scatter dots
     const warnPts = dayStats.warnings
       .filter((w) => w.kind === 'soc_exceeded_capacity' || w.kind === 'soc_below_zero')
       .map((w) => {
-        const pt = dayStats.socTrace.find((p) => p.hourIndex === (w as { hourIndex: number }).hourIndex)
+        const pt = pts.find((p) => p.hourIndex === (w as { hourIndex: number }).hourIndex)
         return pt ? [pt.hourIndex, pt.socPct] : null
       })
-      .filter(Boolean) as [number, number][]
+      .filter((p): p is [number, number] => p !== null)
+
+    const series: object[] = [
+      {
+        type: 'line',
+        data: pts.map((p) => [p.hourIndex, p.socPct]),
+        lineStyle: { color: '#2563eb', width: 2 },
+        itemStyle: { color: '#2563eb' },
+        showSymbol: false,
+        markLine: {
+          symbol: 'none',
+          data: [
+            { yAxis: 0, name: '0%', lineStyle: { color: '#ef4444', type: 'solid' } },
+            { yAxis: battery.dod * 100, name: `DoD ${(battery.dod * 100).toFixed(0)}%`, lineStyle: { color: '#ef4444', type: 'dashed' } },
+            { yAxis: 100, name: '100%', lineStyle: { color: '#9ca3af', type: 'dashed' } },
+          ],
+          label: { show: true, position: 'end', fontSize: 10 },
+        },
+        markArea: markAreaData.length > 0 ? { data: markAreaData } : undefined,
+      },
+    ]
 
     if (warnPts.length > 0) {
-      series.push({
-        type: 'scatter',
-        data: warnPts,
-        itemStyle: { color: '#ef4444' },
-        symbolSize: 10,
-      })
+      series.push({ type: 'scatter', data: warnPts, itemStyle: { color: '#ef4444' }, symbolSize: 10 })
     }
 
     return {
-      tooltip: { 
-        trigger: 'axis', 
+      tooltip: {
+        trigger: 'axis',
         formatter: (p: { value: [number, number] }[]) => {
           if (!p.length || !p[0]) return ''
-          // Grabbing the first matched series item prevents duplicate text items 
-          // in the tooltip layout caused by our single-point segment overlap.
           const val = p[0].value
           return `Hour ${val[0]}: ${val[1].toFixed(1)}%`
-        }
+        },
       },
       xAxis: { type: 'value', name: 'Hour', min: 0, max: pts.length - 1 },
       yAxis: { type: 'value', name: 'SoC %', min: 0, max: 105 },
@@ -427,12 +401,16 @@ function SocTraceChart({ dayStats, battery }: { dayStats: DailyStats; battery: B
 
 // ─── Day Inspection — Side panel ─────────────────────────────────────────────
 
-function DayInspectionPanel({ dayStats }: { dayStats: DailyStats }) {
-  const totalRevenue = dayStats.windows.reduce(
-    (s, w) => s + w.effectiveMargin * w.effectiveEnergyMWh,
-    0,
-  )
-  const totalEFC = dayStats.windows.reduce((s, w) => s + w.effectiveEFC, 0)
+function DayInspectionPanel({ dayStats, battery }: { dayStats: DailyStats; battery: BatterySpec }) {
+  const sqrtEta = Math.sqrt(battery.roundTripEfficiency)
+  // effectiveEnergyMWh = cEnergy * sqrtEta (internal stored)
+  // gridChargeMWh      = cEnergy            = effectiveEnergyMWh / sqrtEta
+  // gridDischargeMWh   = cEnergy * eta      = effectiveEnergyMWh * sqrtEta
+  // netRevenue         = cEnergy * effectiveMargin
+  const totalChargeMWh    = dayStats.windows.reduce((s, w) => s + w.effectiveEnergyMWh / sqrtEta, 0)
+  const totalDischargeMWh = dayStats.windows.reduce((s, w) => s + w.effectiveEnergyMWh * sqrtEta, 0)
+  const totalNetRevenue   = dayStats.windows.reduce((s, w) => s + w.effectiveMargin * (w.effectiveEnergyMWh / sqrtEta), 0)
+  const totalEFC          = dayStats.windows.reduce((s, w) => s + w.effectiveEFC, 0)
 
   return (
     <div className="flex flex-col gap-3 text-xs">
@@ -457,10 +435,11 @@ function DayInspectionPanel({ dayStats }: { dayStats: DailyStats }) {
       ))}
       {dayStats.windows.length > 0 && (
         <div className="rounded border border-gray-100 bg-gray-50 p-2">
-          <p className="font-semibold">Summary</p>
-          <p>Revenue/MW: {(totalRevenue / (dayStats.windows[0]?.effectiveEnergyMWh ?? 1)).toFixed(2)} €</p>
-          <p>Total EFC: {totalEFC.toFixed(3)}</p>
-          <p>Warnings: {dayStats.warnings.length}</p>
+          <p className="mb-1 font-semibold">Day Summary</p>
+          <p className="text-gray-600">Charged: <span className="font-medium text-black">{totalChargeMWh.toFixed(2)} MWh</span></p>
+          <p className="text-gray-600">Discharged: <span className="font-medium text-black">{totalDischargeMWh.toFixed(2)} MWh</span></p>
+          <p className="text-gray-600">Net revenue: <span className="font-medium text-green-700">{totalNetRevenue.toFixed(2)} €</span></p>
+          <p className="text-gray-600">Total EFC: <span className="font-medium text-black">{totalEFC.toFixed(3)}</span></p>
         </div>
       )}
     </div>
@@ -800,7 +779,7 @@ export default function HistoricalView() {
                   {/* Side panel */}
                   <aside className="w-56 shrink-0 rounded border border-gray-200 p-3">
                     <h3 className="mb-2 text-sm font-semibold">Window Details</h3>
-                    <DayInspectionPanel dayStats={selectedDayStats} />
+                    <DayInspectionPanel dayStats={selectedDayStats} battery={battery} />
                   </aside>
                 </div>
               ) : (

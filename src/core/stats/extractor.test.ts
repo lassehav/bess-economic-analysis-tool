@@ -72,6 +72,24 @@ describe('extractDailyStats', () => {
     }
   })
 
+  it('maxCyclesPerDay cap enforced: 3 natural cycles pruned to 2', () => {
+    // Three symmetric cheap/expensive blocks would produce 3 windows without the cap
+    const prices = Array(24).fill(40) as number[]
+    for (const i of [0, 1]) prices[i] = 5
+    for (const i of [4, 5]) prices[i] = 80
+    for (const i of [8, 9]) prices[i] = 5
+    for (const i of [12, 13]) prices[i] = 80
+    for (const i of [16, 17]) prices[i] = 5
+    for (const i of [20, 21]) prices[i] = 80
+
+    const result = extractDailyStats(prices, START, { ...defaultBattery, maxCyclesPerDay: 2 })
+
+    expect(result.windows.length).toBeLessThanOrEqual(2)
+    for (const win of result.windows) {
+      expect(win.effectiveMargin).toBeGreaterThan(0)
+    }
+  })
+
   it('23-hour DST day → no crash, socTrace.length === 24', () => {
     const prices = Array(23).fill(40) as number[]
     const result = extractDailyStats(prices, START, defaultBattery)
