@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(Select-String \"hookform\")",
+      "Bash(npm install *)",
+      "Bash(npx vitest *)"
     ]
   }
 }

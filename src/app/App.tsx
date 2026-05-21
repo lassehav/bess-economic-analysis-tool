@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import HistoricalView from '../features/historical/HistoricalView'
+import ParametersView from '../features/parameters/ParametersView'
+import SimulationView from '../features/simulation/SimulationView'
 
 const TABS = [
   { id: 'historical', label: 'Historical Data' },
@@ -47,6 +49,10 @@ export default function App() {
       <main className={activeTab === 'historical' ? 'px-6 pb-6 pt-4' : 'p-6'}>
         {activeTab === 'historical' ? (
           <HistoricalView />
+        ) : activeTab === 'parameters' ? (
+          <ParametersView />
+        ) : activeTab === 'simulation' ? (
+          <SimulationView />
         ) : (
           <div className="rounded-lg border border-gray-200 p-8 text-center text-gray-400">
             <p className="text-lg font-medium text-black">{TABS.find((t) => t.id === activeTab)?.label}</p>

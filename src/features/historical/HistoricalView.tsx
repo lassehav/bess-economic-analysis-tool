@@ -446,6 +446,61 @@ function DayInspectionPanel({ dayStats, battery }: { dayStats: DailyStats; batte
   )
 }
 
+// ─── Period Summary Card ──────────────────────────────────────────────────────
+
+function PeriodSummaryCard({
+  dailyStats,
+  battery,
+}: {
+  dailyStats: DailyStats[]
+  battery: BatterySpec
+}) {
+  const summary = useMemo(() => {
+    const sqrtEta = Math.sqrt(battery.roundTripEfficiency)
+    let totalChargeMWh = 0
+    let totalDischargeMWh = 0
+    let totalNetRevenue = 0
+    let activeDays = 0
+
+    for (const day of dailyStats) {
+      if (day.windows.length > 0) activeDays++
+      for (const w of day.windows) {
+        totalChargeMWh += w.effectiveEnergyMWh / sqrtEta
+        totalDischargeMWh += w.effectiveEnergyMWh * sqrtEta
+        totalNetRevenue += w.effectiveMargin * (w.effectiveEnergyMWh / sqrtEta)
+      }
+    }
+
+    const totalDays = dailyStats.length
+    const avgRevenuePerActiveDay = activeDays > 0 ? totalNetRevenue / activeDays : 0
+
+    return { totalDays, activeDays, totalChargeMWh, totalDischargeMWh, totalNetRevenue, avgRevenuePerActiveDay }
+  }, [dailyStats, battery])
+
+  const stats: { label: string; value: string }[] = [
+    { label: 'Period days', value: String(summary.totalDays) },
+    { label: 'Active days', value: String(summary.activeDays) },
+    { label: 'Total charged', value: `${summary.totalChargeMWh.toFixed(1)} MWh` },
+    { label: 'Total discharged', value: `${summary.totalDischargeMWh.toFixed(1)} MWh` },
+    { label: 'Net revenue', value: `${summary.totalNetRevenue.toFixed(0)} €` },
+    { label: 'Avg revenue / active day', value: `${summary.avgRevenuePerActiveDay.toFixed(2)} €` },
+  ]
+
+  return (
+    <div className="flex flex-wrap gap-3 rounded border border-gray-200 p-3">
+      {stats.map((s) => (
+        <div
+          key={s.label}
+          className="flex min-w-[120px] flex-1 flex-col gap-0.5 rounded border border-gray-200 px-3 py-2"
+        >
+          <span className="text-xs text-gray-500">{s.label}</span>
+          <span className="text-sm font-semibold text-black">{s.value}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 // ─── Main HistoricalView ──────────────────────────────────────────────────────
 
 export default function HistoricalView() {
@@ -710,7 +765,10 @@ export default function HistoricalView() {
 
         <div className="flex-1 overflow-y-auto p-4">
           {activeTab === 'aggregate' && (
-            <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+            <PeriodSummaryCard dailyStats={dailyStats} battery={battery} />
+          )}
+          {activeTab === 'aggregate' && (
+            <div className="mt-4 grid grid-cols-1 gap-6 xl:grid-cols-2">
               {/* Chart 1 */}
               <div className="rounded border border-gray-200 p-3 xl:col-span-2">
                 <h3 className="mb-2 text-sm font-semibold">1 — Hourly Price Time Series</h3>
