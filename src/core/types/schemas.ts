@@ -16,13 +16,13 @@ export const batteryInputsSchema = z.object({
 
 export const costInputsSchema = z.object({
   batteryCapexPerKWh: z.number().gte(50).lte(1000),
-  pcsCapexPerKW: z.number().gte(20).lte(300),
-  bopCapexPercentOfBatteryPcs: z.number().gte(0).lte(100),
+  pcsCapex: z.number().gte(0),
+  bopCapex: z.number().gte(0),
   developmentCapexPercent: z.number().gte(0).lte(100),
   contingencyPercent: z.number().gte(0).lte(100),
   pcsReplacementIntervalYears: z.number().gte(5).lte(30),
   pcsReplacementCostPercentOfPcs: z.number().gte(0).lte(100),
-  fixedOmPerKWPerYear: z.number().gte(0),
+  fixedOmPerYear: z.number().gte(0),
   variableOmPerMWhThroughput: z.number().gte(0),
   insurancePercentOfCapexPerYear: z.number().gte(0).lte(100),
   landLeasePerYear: z.number().gte(0),

@@ -12,8 +12,8 @@ export type CapexBreakdown = {
 
 export function computeCapex(inputs: Inputs): CapexBreakdown {
   const battery = inputs.costs.batteryCapexPerKWh * inputs.battery.energyMWh * 1000
-  const pcs = inputs.costs.pcsCapexPerKW * inputs.battery.powerMW * 1000
-  const bop = (battery + pcs) * inputs.costs.bopCapexPercentOfBatteryPcs / 100
+  const pcs = inputs.costs.pcsCapex
+  const bop = inputs.costs.bopCapex
   const development = (battery + pcs + bop) * inputs.costs.developmentCapexPercent / 100
   const contingency = (battery + pcs + bop + development) * inputs.costs.contingencyPercent / 100
   const total = battery + pcs + bop + development + contingency
@@ -40,7 +40,7 @@ export function computeAnnualOpex(
   const omFactor = inflFactor * Math.pow(1 + inputs.costs.omEscalationPercentPerYear / 100, year)
 
   const fixedOM =
-    inputs.costs.fixedOmPerKWPerYear * inputs.battery.powerMW * 1000 * omFactor
+    inputs.costs.fixedOmPerYear * omFactor
   const variableOM =
     inputs.costs.variableOmPerMWhThroughput * stream.throughputMWh * omFactor
   const insurance =

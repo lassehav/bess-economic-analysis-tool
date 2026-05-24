@@ -7,7 +7,9 @@
       "Bash(npx vitest *)",
       "Bash(npx tsc *)",
       "Bash(Get-ChildItem -Path \"c:\\\\opinnot\\\\energian varastointi\\\\bess-analyzer\" -Directory)",
-      "Bash(Select-Object Name)"
+      "Bash(Select-Object Name)",
+      "Bash(cd \"/c/opinnot/energian varastointi/bess-analyzer\" && grep -n \"hourlyToDailyParams\\\\|import.*engine\\\\|import.*forecast\" src/features/simulation/SimulationView.tsx | head -20)",
+      "Read(//c/c/opinnot/energian varastointi/bess-analyzer/src/features/simulation/**)"
     ]
   }
 }

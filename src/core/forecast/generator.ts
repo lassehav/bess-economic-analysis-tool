@@ -311,20 +311,22 @@ export function generateForecast(
           const scarcityRatio = residualGridLoad / Math.max(1000, maxPowerConsumption)
           let scarcityPremium = 0
           
+          // 1. Calculate a dynamic cap modifier based on the actual forecast year parameters
+          const volatilityMultiplier = params.spreadMultiplier ?? 1.0;
+
+          // 2. Feed this directly into your premium and ceiling math
           if (scarcityRatio > 0.15) {
-            // Apply the aggressive structural peak dampener directly to the exponent output
-            scarcityPremium = 350 * Math.pow(scarcityRatio - 0.15, 2.2) * peakSpreadDampener
+            // Volatility now expands or contracts the height of the peak directly
+            scarcityPremium = 350 * Math.pow(scarcityRatio - 0.15, 2.2) * peakSpreadDampener * volatilityMultiplier;
             
-            // Logarithmic ceiling compression limits daily pricing bounds to non-scarcity values 
-            // except during deep systematic lulls (like explicit stochastic events)
-            if (scarcityPremium > 40) {
-              scarcityPremium = 40 + 25 * Math.log10(scarcityPremium - 40 + 1)
+            const dynamicCeilingThreshold = 40 * volatilityMultiplier;
+            if (scarcityPremium > dynamicCeilingThreshold) {
+              scarcityPremium = dynamicCeilingThreshold + (25 * volatilityMultiplier) * Math.log10(scarcityPremium - dynamicCeilingThreshold + 1);
             }
           } else {
-            // Moderate operational gradient scaling
-            const profileGradient = (demandShape - 1.0) * 45 * peakSpreadDampener
-            basePrice = muDayBase + profileGradient + macroNoise
-          }          
+            const profileGradient = (demandShape - 1.0) * 45 * peakSpreadDampener * volatilityMultiplier;
+            basePrice = muDayBase + profileGradient + macroNoise;
+          }         
           finalPrice = basePrice + scarcityPremium
           
         // B. OVERSUPPLY REGIME

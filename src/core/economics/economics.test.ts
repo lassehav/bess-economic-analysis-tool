@@ -17,13 +17,13 @@ const BASE_INPUTS: Inputs = {
   },
   costs: {
     batteryCapexPerKWh: 200,
-    pcsCapexPerKW: 60,
-    bopCapexPercentOfBatteryPcs: 5,
+    pcsCapex: 600_000,    // €60/kW × 10 MW
+    bopCapex: 430_000,    // 5% × (€8 M battery + €600 k PCS)
     developmentCapexPercent: 3,
     contingencyPercent: 5,
     pcsReplacementIntervalYears: 12,
     pcsReplacementCostPercentOfPcs: 50,
-    fixedOmPerKWPerYear: 10,
+    fixedOmPerYear: 100_000, // €10/kW/yr × 10 MW
     variableOmPerMWhThroughput: 0.5,
     insurancePercentOfCapexPerYear: 0.5,
     landLeasePerYear: 50000,
@@ -86,13 +86,13 @@ describe('economics — constant revenue annuity', () => {
       },
       costs: {
         batteryCapexPerKWh: 200,
-        pcsCapexPerKW: 60,
-        bopCapexPercentOfBatteryPcs: 0,
+        pcsCapex: 600_000, // €60/kW × 10 MW
+        bopCapex: 0,
         developmentCapexPercent: 0,
         contingencyPercent: 0,
         pcsReplacementIntervalYears: 30, // > projectLifeYears so no replacement
         pcsReplacementCostPercentOfPcs: 0,
-        fixedOmPerKWPerYear: 0,
+        fixedOmPerYear: 0,
         variableOmPerMWhThroughput: 0,
         insurancePercentOfCapexPerYear: 0,
         landLeasePerYear: 0,
@@ -112,7 +112,7 @@ describe('economics — constant revenue annuity', () => {
     }
 
     const capex = computeCapex(inputs)
-    // battery = 200 * 40000 = 8,000,000; pcs = 60 * 10000 = 600,000; total = 8,600,000
+    // battery = 200 * 40000 = 8,000,000; pcsCapex = 600,000; total = 8,600,000
     const annualRevenue = 1_000_000
     const streams = makeStreams(10, annualRevenue, 0, 40, 0.9)
 
@@ -145,13 +145,13 @@ describe('economics — known LCOS test vector', () => {
       },
       costs: {
         batteryCapexPerKWh: 200,
-        pcsCapexPerKW: 20, // minimum allowed
-        bopCapexPercentOfBatteryPcs: 0,
+        pcsCapex: 200_000, // €20/kW × 10 MW
+        bopCapex: 0,
         developmentCapexPercent: 0,
         contingencyPercent: 0,
         pcsReplacementIntervalYears: 30,
         pcsReplacementCostPercentOfPcs: 0,
-        fixedOmPerKWPerYear: 0,
+        fixedOmPerYear: 0,
         variableOmPerMWhThroughput: 0,
         insurancePercentOfCapexPerYear: 0,
         landLeasePerYear: 0,
@@ -172,8 +172,7 @@ describe('economics — known LCOS test vector', () => {
 
     // Only battery capex: 200 €/kWh × 40 MWh × 1000 = 8,000,000 €
     // PCS cost = 20 * 10 * 1000 = 200,000 — we zero out PCS contribution by overriding
-    // Use zero pcsCapexPerKW is not allowed (min 20), so just verify pure battery LCOS
-    // Actually let's compute with pcsCapexPerKW=20 (minimum) and account for it
+    // pcsCapex = 200_000 (€20/kW × 10 MW); total CAPEX includes PCS, LCOS verified against it
 
     // usable = 40 × 0.9 = 36 MWh
     // EFC per year = 6000 / 20 = 300

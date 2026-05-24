@@ -23,13 +23,13 @@ const PRESET_LFP_4H: Inputs = {
   },
   costs: {
     batteryCapexPerKWh: 200,
-    pcsCapexPerKW: 60,
-    bopCapexPercentOfBatteryPcs: 5,
+    pcsCapex: 450_000,       // €60/kW × 10 MW
+    bopCapex: 430_000,       // 5% × (€8 M battery + €600 k PCS)
     developmentCapexPercent: 3,
     contingencyPercent: 5,
     pcsReplacementIntervalYears: 12,
     pcsReplacementCostPercentOfPcs: 50,
-    fixedOmPerKWPerYear: 10,
+    fixedOmPerYear: 100_000, // €10/kW/yr × 10 MW
     variableOmPerMWhThroughput: 0.5,
     insurancePercentOfCapexPerYear: 0.5,
     landLeasePerYear: 2000,
@@ -58,6 +58,7 @@ const PRESET_LFP_2H: Inputs = {
   costs: {
     ...PRESET_LFP_4H.costs,
     batteryCapexPerKWh: 180,
+    bopCapex: 210_000, // 5% × (€3.6 M battery + €600 k PCS)
   },
 }
 
@@ -74,6 +75,7 @@ const PRESET_NMC_1H: Inputs = {
   costs: {
     ...PRESET_LFP_4H.costs,
     batteryCapexPerKWh: 220,
+    bopCapex: 140_000, // 5% × (€2.2 M battery + €600 k PCS)
   },
 }
 
@@ -88,6 +90,7 @@ const PRESET_LFP_8H: Inputs = {
   costs: {
     ...PRESET_LFP_4H.costs,
     batteryCapexPerKWh: 160,
+    bopCapex: 670_000, // 5% × (€12.8 M battery + €600 k PCS)
   },
 }
 
@@ -156,11 +159,13 @@ function NumericField({
   label,
   unit,
   error,
+  hint,
   children,
 }: {
   label: string
-  unit?: string
-  error?: string
+  unit?: string | undefined
+  error?: string | undefined
+  hint?: string | undefined
   children: React.ReactNode
 }) {
   return (
@@ -170,6 +175,7 @@ function NumericField({
         {unit && <span className="ml-1 text-gray-400">({unit})</span>}
       </label>
       {children}
+      {hint && <p className="text-xs text-gray-400">{hint}</p>}
       {error && <p className="text-xs text-red-600">{error}</p>}
     </div>
   )
@@ -670,47 +676,58 @@ export default function ParametersView() {
             )}
 
             <Controller
-              name="costs.pcsCapexPerKW"
+              name="costs.pcsCapex"
               control={control}
-              render={({ field }) => (
-                <NumericField
-                  label="PCS CAPEX"
-                  unit="€/kW"
-                  error={costsErrors.pcsCapexPerKW?.message}
-                >
-                  <input
-                    type="number"
-                    value={field.value}
-                    onChange={(e) => field.onChange(parseFloat(e.target.value))}
-                    min={20}
-                    max={300}
-                    step={5}
-                    className={inputCls}
-                  />
-                </NumericField>
-              )}
+              render={({ field }) => {
+                const pw = safeInputs.battery.powerMW
+                const lo = Math.round(50 * pw * 1000).toLocaleString('fi-FI')
+                const hi = Math.round(100 * pw * 1000).toLocaleString('fi-FI')
+                return (
+                  <NumericField
+                    label="PCS CAPEX"
+                    unit="€"
+                    hint={`Typical €50–100/kW · ${pw} MW = €${lo}–€${hi}`}
+                    error={costsErrors.pcsCapex?.message}
+                  >
+                    <input
+                      type="number"
+                      value={field.value}
+                      onChange={(e) => field.onChange(parseFloat(e.target.value))}
+                      min={0}
+                      step={10000}
+                      className={inputCls}
+                    />
+                  </NumericField>
+                )
+              }}
             />
 
             <Controller
-              name="costs.bopCapexPercentOfBatteryPcs"
+              name="costs.bopCapex"
               control={control}
-              render={({ field }) => (
-                <NumericField
-                  label="BoP CAPEX"
-                  unit="% of battery+PCS"
-                  error={costsErrors.bopCapexPercentOfBatteryPcs?.message}
-                >
-                  <input
-                    type="number"
-                    value={field.value}
-                    onChange={(e) => field.onChange(parseFloat(e.target.value))}
-                    min={0}
-                    max={100}
-                    step={0.5}
-                    className={inputCls}
-                  />
-                </NumericField>
-              )}
+              render={({ field }) => {
+                const battCapex = safeInputs.costs.batteryCapexPerKWh * safeInputs.battery.energyMWh * 1000
+                const base = battCapex + safeInputs.costs.pcsCapex
+                const lo = Math.round(0.05 * base).toLocaleString('fi-FI')
+                const hi = Math.round(0.20 * base).toLocaleString('fi-FI')
+                return (
+                  <NumericField
+                    label="BoP CAPEX"
+                    unit="€"
+                    hint={`Typical 5–20% of battery + PCS. At current params: €${lo}–€${hi}`}
+                    error={costsErrors.bopCapex?.message}
+                  >
+                    <input
+                      type="number"
+                      value={field.value}
+                      onChange={(e) => field.onChange(parseFloat(e.target.value))}
+                      min={0}
+                      step={10000}
+                      className={inputCls}
+                    />
+                  </NumericField>
+                )
+              }}
             />
 
             <Controller
@@ -808,24 +825,30 @@ export default function ParametersView() {
           {/* 5. OPEX */}
           <Section title="5. OPEX">
             <Controller
-              name="costs.fixedOmPerKWPerYear"
+              name="costs.fixedOmPerYear"
               control={control}
-              render={({ field }) => (
-                <NumericField
-                  label="Fixed O&M"
-                  unit="€/kW/year"
-                  error={costsErrors.fixedOmPerKWPerYear?.message}
-                >
-                  <input
-                    type="number"
-                    value={field.value}
-                    onChange={(e) => field.onChange(parseFloat(e.target.value))}
-                    min={0}
-                    step={0.5}
-                    className={inputCls}
-                  />
-                </NumericField>
-              )}
+              render={({ field }) => {
+                const pw = safeInputs.battery.powerMW
+                const lo = Math.round(5 * pw * 1000).toLocaleString('fi-FI')
+                const hi = Math.round(15 * pw * 1000).toLocaleString('fi-FI')
+                return (
+                  <NumericField
+                    label="Fixed O&M"
+                    unit="€/year"
+                    hint={`Typical €5–15/kW/yr · ${pw} MW = €${lo}–€${hi}/yr`}
+                    error={costsErrors.fixedOmPerYear?.message}
+                  >
+                    <input
+                      type="number"
+                      value={field.value}
+                      onChange={(e) => field.onChange(parseFloat(e.target.value))}
+                      min={0}
+                      step={5000}
+                      className={inputCls}
+                    />
+                  </NumericField>
+                )
+              }}
             />
 
             <Controller

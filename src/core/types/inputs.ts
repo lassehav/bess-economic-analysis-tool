@@ -13,13 +13,13 @@ export type BatteryInputs = {
 
 export type CostInputs = {
   batteryCapexPerKWh: number
-  pcsCapexPerKW: number
-  bopCapexPercentOfBatteryPcs: number
+  pcsCapex: number           // absolute €
+  bopCapex: number           // absolute €
   developmentCapexPercent: number
   contingencyPercent: number
   pcsReplacementIntervalYears: number
   pcsReplacementCostPercentOfPcs: number
-  fixedOmPerKWPerYear: number
+  fixedOmPerYear: number     // absolute €/yr
   variableOmPerMWhThroughput: number
   insurancePercentOfCapexPerYear: number
   landLeasePerYear: number

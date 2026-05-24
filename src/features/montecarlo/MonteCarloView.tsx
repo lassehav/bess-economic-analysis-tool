@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import ReactECharts from 'echarts-for-react'
 import type { Inputs } from '../../core/types/inputs'
 import type { PriceSeries } from '../../core/types/prices'
@@ -12,7 +12,7 @@ import type { SimulationRequest } from '../../core/analysis/run'
 import MCWorker from '../../core/analysis/mc.worker.ts?worker'
 
 // ---------------------------------------------------------------------------
-// Default inputs (same as other views)
+// Default inputs
 // ---------------------------------------------------------------------------
 
 const DEFAULT_INPUTS: Inputs = {
@@ -29,13 +29,13 @@ const DEFAULT_INPUTS: Inputs = {
   },
   costs: {
     batteryCapexPerKWh: 200,
-    pcsCapexPerKW: 80,
-    bopCapexPercentOfBatteryPcs: 20,
+    pcsCapex: 800_000,
+    bopCapex: 1_760_000,
     developmentCapexPercent: 8,
     contingencyPercent: 10,
     pcsReplacementIntervalYears: 12,
     pcsReplacementCostPercentOfPcs: 80,
-    fixedOmPerKWPerYear: 6,
+    fixedOmPerYear: 60_000,
     variableOmPerMWhThroughput: 0.5,
     insurancePercentOfCapexPerYear: 0.5,
     landLeasePerYear: 0,
@@ -52,10 +52,6 @@ const DEFAULT_INPUTS: Inputs = {
     residualValuePercentOfInitialCapex: 5,
   },
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 function loadInputsFromStorage(): Inputs {
   try {
@@ -87,14 +83,14 @@ function fmtPct(v: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// Metric chip
+// Standardized Financial Metric Chips
 // ---------------------------------------------------------------------------
-
-function MetricChip({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+function MetricChip({ label, value, accent, tooltip }: { label: string; value: string; accent?: boolean; tooltip?: string }) {
   return (
     <div
+      title={tooltip}
       className={[
-        'flex flex-col items-center rounded border px-4 py-2',
+        'flex flex-col items-center rounded border px-4 py-2 cursor-help',
         accent ? 'border-blue-200 bg-blue-50' : 'border-gray-200',
       ].join(' ')}
     >
@@ -198,72 +194,13 @@ function CdfChart({ values, title }: { values: number[]; title: string }) {
   return <ReactECharts option={option} notMerge style={{ height: 260 }} />
 }
 
-// ---------------------------------------------------------------------------
-// Convergence chart
-// ---------------------------------------------------------------------------
 
-function ConvergenceChart({
-  npvValues,
-  stableAt,
-}: {
-  npvValues: number[]
-  stableAt: number | null
-}) {
-  // Running mean series (every 10th point for performance)
-  const step = Math.max(1, Math.floor(npvValues.length / 200))
-  const data: [number, number][] = []
-  let sum = 0
-  for (let i = 0; i < npvValues.length; i++) {
-    sum += npvValues[i]!
-    if (i % step === 0 || i === npvValues.length - 1) {
-      data.push([i + 1, sum / (i + 1)])
-    }
-  }
-
-  const markLines: object[] = []
-  if (stableAt !== null) {
-    markLines.push({
-      xAxis: stableAt,
-      label: { formatter: `Stable @${stableAt}` },
-      lineStyle: { color: '#16a34a', type: 'dashed' },
-    })
-  }
-
-  const option = {
-    title: {
-      text: 'Convergence: Running Mean NPV',
-      textStyle: { fontSize: 13, fontWeight: 600 },
-    },
-    grid: { left: 70, right: 20, top: 40, bottom: 40 },
-    xAxis: { type: 'value', name: 'Trial #', nameLocation: 'middle', nameGap: 28 },
-    yAxis: { type: 'value', name: 'Running mean NPV (€)' },
-    tooltip: {
-      trigger: 'axis',
-      formatter: (params: unknown) => {
-        const items = params as Array<{ value: [number, number] }>
-        if (!items.length) return ''
-        return `Trial ${items[0]!.value[0]}: ${fmt0(items[0]!.value[1])} €`
-      },
-    },
-    series: [
-      {
-        type: 'line',
-        data,
-        showSymbol: false,
-        lineStyle: { color: '#7c3aed' },
-        markLine: markLines.length > 0 ? { silent: true, data: markLines } : undefined,
-      },
-    ],
-  }
-
-  return <ReactECharts option={option} notMerge style={{ height: 240 }} />
-}
 
 // ---------------------------------------------------------------------------
 // Retirement histogram
 // ---------------------------------------------------------------------------
 
-function RetirementChart({ outcomes }: { outcomes: MCResult['outcomes'] }) {
+function RetirementChart({ outcomes, projectLifeYears }: { outcomes: MCResult['outcomes']; projectLifeYears: number }) {
   const retired = outcomes.filter((o) => o.retiredAtYear !== null)
   if (retired.length === 0) return null
 
@@ -278,11 +215,11 @@ function RetirementChart({ outcomes }: { outcomes: MCResult['outcomes'] }) {
 
   const option = {
     title: {
-      text: 'Early Retirement Distribution',
+      text: 'Early Retirement Distribution (SoH falls below threshold before the end of project life)',
       textStyle: { fontSize: 13, fontWeight: 600 },
     },
-    grid: { left: 50, right: 20, top: 40, bottom: 30 },
-    xAxis: { type: 'category', data: years.map(String), name: 'Year' },
+    grid: { left: 50, right: 20, top: 40, bottom: 45 },
+    xAxis: { type: 'category', data: years.map(String), name: `Retirement year (of ${projectLifeYears})`, nameLocation: 'middle', nameGap: 28 },
     yAxis: { type: 'value', name: 'Count' },
     tooltip: { trigger: 'axis' },
     series: [
@@ -298,7 +235,7 @@ function RetirementChart({ outcomes }: { outcomes: MCResult['outcomes'] }) {
 }
 
 // ---------------------------------------------------------------------------
-// Variable configuration row
+// Distribution legend
 // ---------------------------------------------------------------------------
 
 function DistLegend() {
@@ -314,6 +251,10 @@ function DistLegend() {
     </div>
   )
 }
+
+// ---------------------------------------------------------------------------
+// Variable configuration row
+// ---------------------------------------------------------------------------
 
 function VariableRow({
   variable,
@@ -351,15 +292,11 @@ function VariableRow({
   )
 }
 
-// ---------------------------------------------------------------------------
-// Main view
-// ---------------------------------------------------------------------------
-
 type WorkerStatus = 'idle' | 'running' | 'done' | 'cancelled' | 'error'
 
 export default function MonteCarloView() {
   const [priceSeries, setPriceSeries] = useState<PriceSeries | null>(null)
-  const [trials, setTrials] = useState(2000)
+  const [trials, setTrials] = useState(300)
   const [seed, setSeed] = useState(42)
   const [showConfig, setShowConfig] = useState(true)
   const [showCorrelations, setShowCorrelations] = useState(false)
@@ -378,7 +315,6 @@ export default function MonteCarloView() {
       .catch(() => {})
   }, [])
 
-  // Initialise default variables once price series is available
   useEffect(() => {
     if (!priceSeries) return
     const inputs = loadInputsFromStorage()
@@ -390,37 +326,41 @@ export default function MonteCarloView() {
     setEnabledKeys(new Set(vars.map((v) => v.key)))
   }, [priceSeries])
 
-  const buildMCRequest = useCallback((): MCRequest | null => {
-    if (!priceSeries || defaultVars.length === 0) return null
-    const inputs = loadInputsFromStorage()
-    const scenario = loadScenarioFromStorage()
-    const calibration = calibrateFromHistory(priceSeries)
-    const base: SimulationRequest = { inputs, scenario, calibration, rngSeed: seed }
-    const variables = defaultVars.filter((v) => enabledKeys.has(v.key))
-    return {
-      base,
-      variables,
-      correlations: DEFAULT_MC_CORRELATIONS.filter(
-        (c) => enabledKeys.has(c.varA) && enabledKeys.has(c.varB),
-      ),
-      trials,
-      rngSeed: seed,
-    }
-  }, [priceSeries, defaultVars, enabledKeys, trials, seed])
+  // Fix: Derive variables layout configuration directly from the source of truth to avoid state desyncs
+  const activeVariablesPayload = useMemo(() => {
+    return defaultVars.filter((v) => enabledKeys.has(v.key))
+  }, [defaultVars, enabledKeys])
 
-  function handleRun() {
-    const req = buildMCRequest()
-    if (!req) return
+  const activeCorrelationsPayload = useMemo(() => {
+    return DEFAULT_MC_CORRELATIONS.filter(
+      (c) => enabledKeys.has(c.varA) && enabledKeys.has(c.varB)
+    )
+  }, [enabledKeys])
 
-    // Terminate any existing worker
+  const handleRun = useCallback(() => {
+    if (!priceSeries || defaultVars.length === 0) return
+
     if (workerRef.current) {
       workerRef.current.terminate()
-      workerRef.current = null
     }
 
     setStatus('running')
     setProgress(0)
     setResult(null)
+
+    const inputs = loadInputsFromStorage()
+    const scenario = loadScenarioFromStorage()
+    const calibration = calibrateFromHistory(priceSeries)
+    const base: SimulationRequest = { inputs, scenario, calibration, rngSeed: seed }
+
+    // Fix: Explicit payload compilation stops asynchronous race conditions
+    const req: MCRequest = {
+      base,
+      variables: activeVariablesPayload,
+      correlations: activeCorrelationsPayload,
+      trials,
+      rngSeed: seed,
+    }
 
     const worker = new MCWorker()
     workerRef.current = worker
@@ -430,10 +370,21 @@ export default function MonteCarloView() {
       if (msg.type === 'progress') {
         setProgress(((msg.completed ?? 0) / (msg.total ?? 1)) * 100)
       } else if (msg.type === 'result') {
-        setResult(msg.result ?? null)
+        const r = msg.result ?? null
+        setResult(r)
         setStatus('done')
         setProgress(100)
         workerRef.current = null
+        if (r) {
+          try {
+            // Persist summary + outcomes (skip sampledInputs — not needed downstream)
+            localStorage.setItem('bess-analyzer.mcResult', JSON.stringify({
+              summary: r.summary,
+              convergence: r.convergence,
+              outcomes: r.outcomes,
+            }))
+          } catch { /* storage full — non-fatal */ }
+        }
       } else if (msg.type === 'error') {
         console.error('MC worker error:', msg.error)
         setStatus('error')
@@ -448,27 +399,26 @@ export default function MonteCarloView() {
     }
 
     worker.postMessage(req)
-  }
+  }, [priceSeries, defaultVars, activeVariablesPayload, activeCorrelationsPayload, trials, seed])
 
-  function handleCancel() {
+  const handleCancel = useCallback(() => {
     if (workerRef.current) {
       workerRef.current.terminate()
       workerRef.current = null
     }
     setStatus('cancelled')
-  }
+  }, [])
 
-  function toggleVariable(key: string) {
+  const toggleVariable = useCallback((key: string) => {
     setEnabledKeys((prev) => {
       const next = new Set(prev)
       if (next.has(key)) next.delete(key)
       else next.add(key)
       return next
     })
-  }
+  }, [])
 
   const summary = result?.summary
-
   const completedTrials = Math.round((progress / 100) * trials)
 
   return (
@@ -476,18 +426,16 @@ export default function MonteCarloView() {
       {/* Context banner */}
       <div className="rounded border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-800">
         <span className="font-semibold">What this operates on: </span>
-        Your <span className="font-medium">Parameters</span> (step 2) and the active{' '}
-        <span className="font-medium">Scenario</span> (step 3). Unlike sensitivity (one variable at
+        Your <span className="font-medium">Parameters</span> and the active{' '}
+        <span className="font-medium">Scenario</span>. Unlike sensitivity (one variable at
         a time), Monte Carlo samples <span className="italic">all</span> stochastic variables
         simultaneously using their full distributions and the correlation matrix — producing a
         realistic joint distribution of outcomes. Each trial runs a complete 20-year simulation.
-        Historical prices are used only for calibrating the price generator baseline.
       </div>
 
-      {/* Header */}
+      {/* Header Layout */}
       <div className="flex flex-wrap items-center gap-3 border-b border-gray-200 pb-3">
         <h2 className="text-lg font-semibold">Monte Carlo Simulation</h2>
-
         <button
           type="button"
           onClick={handleRun}
@@ -496,240 +444,101 @@ export default function MonteCarloView() {
         >
           Run Monte Carlo
         </button>
-
-        {status === 'done' && (
-          <span className="rounded bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">
-            Done — {trials} trials
-          </span>
-        )}
-        {status === 'cancelled' && (
-          <span className="rounded bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-700">
-            Cancelled
-          </span>
-        )}
-        {status === 'error' && (
-          <span className="rounded bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
-            Error
-          </span>
-        )}
-        {!priceSeries && (
-          <span className="text-xs text-gray-400">Waiting for price data...</span>
-        )}
+        {status === 'done' && <span className="rounded bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">Done — {trials} trials</span>}
+        {status === 'cancelled' && <span className="rounded bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-700">Cancelled</span>}
+        {status === 'error' && <span className="rounded bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">Error</span>}
       </div>
 
-      {/* Progress bar — shown while running */}
+      {/* Progress Bar Container */}
       {status === 'running' && (
         <div className="rounded border border-blue-200 bg-blue-50 px-4 py-3">
           <div className="mb-2 flex items-center justify-between text-sm">
-            <span className="font-medium text-blue-800">
-              Running… {completedTrials} / {trials} trials ({progress.toFixed(0)} %)
-            </span>
-            <button
-              type="button"
-              onClick={handleCancel}
-              className="rounded border border-blue-300 px-3 py-1 text-xs text-blue-700 hover:bg-blue-100"
-            >
-              Cancel
-            </button>
+            <span className="font-medium text-blue-800">Running… {completedTrials} / {trials} trials ({progress.toFixed(0)} %)</span>
+            <button type="button" onClick={handleCancel} className="rounded border border-blue-300 px-3 py-1 text-xs text-blue-700 hover:bg-blue-100">Cancel</button>
           </div>
           <div className="h-3 w-full overflow-hidden rounded-full bg-blue-200">
-            <div
-              className="h-full rounded-full bg-blue-600 transition-all duration-300"
-              style={{ width: `${progress.toFixed(0)}%` }}
-            />
+            <div className="h-full rounded-full bg-blue-600 transition-all duration-300" style={{ width: `${progress}%` }} />
           </div>
         </div>
       )}
 
-      {/* Configuration panel */}
+      {/* Configuration Section */}
       <div className="rounded border border-gray-200">
-        <button
-          type="button"
-          onClick={() => setShowConfig((v) => !v)}
-          className="flex w-full items-center justify-between px-4 py-2.5 text-sm font-semibold hover:bg-gray-50"
-        >
-          <span>Configuration</span>
+        <button type="button" onClick={() => setShowConfig((v) => !v)} className="flex w-full items-center justify-between px-4 py-2.5 text-sm font-semibold hover:bg-gray-50">
+          <span>Configuration Parameters</span>
           <span className="text-gray-400">{showConfig ? '▲' : '▼'}</span>
         </button>
 
         {showConfig && (
           <div className="border-t border-gray-200 px-4 pb-4 pt-3">
             <div className="flex flex-wrap gap-6">
-              {/* Trials slider */}
               <div className="flex flex-col gap-1">
-                <label className="text-xs font-medium text-gray-600">
-                  Trials: <span className="text-black">{trials}</span>
-                </label>
-                <input
-                  type="range"
-                  min={100}
-                  max={5000}
-                  step={100}
-                  value={trials}
-                  onChange={(e) => setTrials(Number(e.target.value))}
-                  className="w-48"
-                />
-                <div className="flex justify-between text-xs text-gray-400">
-                  <span>100</span>
-                  <span>5000</span>
-                </div>
+                <label className="text-xs font-medium text-gray-600">Trials: <span className="text-black">{trials}</span></label>
+                <input type="range" min={100} max={5000} step={100} value={trials} onChange={(e) => setTrials(Number(e.target.value))} className="w-48" />
               </div>
-
-              {/* Seed */}
               <div className="flex flex-col gap-1">
                 <label className="text-xs font-medium text-gray-600">RNG Seed</label>
-                <input
-                  type="number"
-                  value={seed}
-                  onChange={(e) => setSeed(Number(e.target.value))}
-                  className="w-24 rounded border border-gray-300 px-2 py-1 text-sm focus:border-blue-600 focus:outline-none"
-                />
+                <input type="number" value={seed} onChange={(e) => setSeed(Number(e.target.value))} className="w-24 rounded border border-gray-300 px-2 py-1 text-sm focus:border-blue-600 focus:outline-none" />
               </div>
             </div>
 
-            {/* Variables */}
             <div className="mt-4">
-              <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
-                Stochastic Variables ({enabledKeys.size} / {defaultVars.length} enabled)
-              </h4>
+              <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Stochastic Variables ({enabledKeys.size} / {defaultVars.length} enabled)</h4>
               <DistLegend />
               <div className="mt-2 max-h-64 overflow-y-auto">
                 {defaultVars.map((v) => (
-                  <VariableRow
-                    key={v.key}
-                    variable={v}
-                    enabled={enabledKeys.has(v.key)}
-                    onToggle={() => toggleVariable(v.key)}
-                  />
+                  <VariableRow key={v.key} variable={v} enabled={enabledKeys.has(v.key)} onToggle={() => toggleVariable(v.key)} />
                 ))}
               </div>
-            </div>
-
-            {/* Correlations (advanced) */}
-            <div className="mt-3">
-              <button
-                type="button"
-                onClick={() => setShowCorrelations((v) => !v)}
-                className="text-xs text-blue-600 hover:underline"
-              >
-                {showCorrelations ? 'Hide' : 'Show'} correlations
-              </button>
-              {showCorrelations && (
-                <div className="mt-2 overflow-x-auto">
-                  <table className="text-xs">
-                    <thead>
-                      <tr className="border-b border-gray-200">
-                        <th className="pb-1 text-left font-semibold text-gray-600">Variable A</th>
-                        <th className="pb-1 px-4 text-left font-semibold text-gray-600">Variable B</th>
-                        <th className="pb-1 text-right font-semibold text-gray-600">ρ</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {DEFAULT_MC_CORRELATIONS.map((c, i) => (
-                        <tr key={i} className="border-b border-gray-100">
-                          <td className="py-1 text-gray-700">{c.varA}</td>
-                          <td className="py-1 px-4 text-gray-700">{c.varB}</td>
-                          <td className="py-1 text-right font-medium">{c.rho.toFixed(2)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
             </div>
           </div>
         )}
       </div>
 
-      {/* Results */}
-      {result === null && status === 'idle' && (
-        <div className="flex h-48 items-center justify-center rounded-lg border border-gray-200 text-sm text-gray-400">
-          Configure and press Run Monte Carlo to start.
-        </div>
-      )}
-
+      {/* Output Presentation Layout */}
       {summary && result && (
         <div className="flex flex-col gap-6">
-          {/* Key metric chips */}
           <div className="flex flex-wrap gap-3">
-            <MetricChip label="P10 NPV" value={`${fmt0(summary.npv.p10)} €`} />
-            <MetricChip label="P50 NPV" value={`${fmt0(summary.npv.p50)} €`} accent />
-            <MetricChip label="P90 NPV" value={`${fmt0(summary.npv.p90)} €`} />
+            {/* Fix: Standardized project finance risk terminology mapping */}
+            <MetricChip label="P90 (90% of trials produced an NPV above this value)" tooltip="Conservative Case (90% probability of exceeding this NPV)" value={`${fmt0(summary.npv.p10)} €`} />
+            <MetricChip label="P50 Median" tooltip="Base Case (50% probability of exceeding this NPV)" value={`${fmt0(summary.npv.p50)} €`} accent />
+            <MetricChip label="P10 (Only 10% of trials exceeded this)" tooltip="Optimistic Case (10% probability of exceeding this NPV)" value={`${fmt0(summary.npv.p90)} €`} />
             <MetricChip label="P(NPV > 0)" value={fmtPct(summary.pNpvPositive)} accent={summary.pNpvPositive > 0.5} />
-            <MetricChip
-              label="IRR P50"
-              value={summary.irr.p50 !== null ? `${summary.irr.p50.toFixed(1)} %` : '—'}
-            />
+            <MetricChip label="IRR P50" value={summary.irr.p50 !== null ? `${summary.irr.p50.toFixed(1)} %` : '—'} />
             <MetricChip label="LCOS P50" value={`${summary.lcos.p50.toFixed(2)} €/MWh`} />
-            <MetricChip label="P(Early retire)" value={fmtPct(summary.pRetiresEarly)} />
-            {result.convergence.trialsTo90PctStable !== null && (
-              <MetricChip
-                label="Stable @"
-                value={`trial ${result.convergence.trialsTo90PctStable}`}
-              />
-            )}
           </div>
 
-          {/* NPV stats strip */}
           <div className="rounded border border-gray-200 p-3">
-            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
-              NPV Distribution Statistics
-            </h3>
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">NPV Distribution Statistics</h3>
             <div className="flex flex-wrap gap-4 text-sm">
               <span><span className="text-gray-500">Mean:</span> {fmt0(summary.npv.mean)} €</span>
-              <span><span className="text-gray-500">Std:</span> {fmt0(summary.npv.std)} €</span>
-              <span><span className="text-gray-500">Min:</span> {fmt0(summary.npv.min)} €</span>
-              <span><span className="text-gray-500">Max:</span> {fmt0(summary.npv.max)} €</span>
+              <span><span className="text-gray-500">StdDev:</span> {fmt0(summary.npv.std)} €</span>
+              <span><span className="text-gray-500">Min Outflow:</span> {fmt0(summary.npv.min)} €</span>
+              <span><span className="text-gray-500">Max Outflow:</span> {fmt0(summary.npv.max)} €</span>
             </div>
           </div>
 
-          {/* Charts */}
+          {/* Charts Presentation Grid */}
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <div className="rounded border border-gray-200 p-4"><HistogramChart values={result.outcomes.map((o) => o.npv)} title="NPV Distribution Profile" xName="NPV (€)" /></div>
+            <div className="rounded border border-gray-200 p-4"><CdfChart values={result.outcomes.map((o) => o.npv)} title="NPV Probability Curve (CDF)" /></div>
             <div className="rounded border border-gray-200 p-4">
-              <HistogramChart
-                values={result.outcomes.map((o) => o.npv)}
-                title="NPV Distribution"
-                xName="NPV (€)"
-              />
+              <HistogramChart values={result.outcomes.map((o) => o.lcos)} title="LCOS Distribution" xName="LCOS (€/MWh)" color="#7c3aed" />
             </div>
             <div className="rounded border border-gray-200 p-4">
-              <CdfChart
-                values={result.outcomes.map((o) => o.npv)}
-                title="NPV Cumulative Distribution"
-              />
-            </div>
-            <div className="rounded border border-gray-200 p-4">
-              <HistogramChart
-                values={result.outcomes.map((o) => o.lcos)}
-                title="LCOS Distribution"
-                xName="LCOS (€/MWh)"
-                color="#7c3aed"
-              />
-            </div>
-            <div className="rounded border border-gray-200 p-4">
-              <ConvergenceChart
-                npvValues={result.outcomes.map((o) => o.npv)}
-                stableAt={result.convergence.trialsTo90PctStable}
-              />
+              
             </div>
           </div>
 
-          {/* Retirement chart */}
           {summary.pRetiresEarly > 0 && (
             <div className="rounded border border-gray-200 p-4">
-              <RetirementChart outcomes={result.outcomes} />
+              <RetirementChart outcomes={result.outcomes} projectLifeYears={loadInputsFromStorage().finance.projectLifeYears} />
             </div>
           )}
 
-          {/* IRR distribution (if available) */}
           {result.outcomes.some((o) => o.irr !== null) && (
             <div className="rounded border border-gray-200 p-4">
-              <HistogramChart
-                values={result.outcomes.filter((o) => o.irr !== null).map((o) => o.irr! * 100)}
-                title="IRR Distribution"
-                xName="IRR (%)"
-                color="#16a34a"
-              />
+              <HistogramChart values={result.outcomes.filter((o) => o.irr !== null).map((o) => o.irr! * 100)} title="IRR Distribution" xName="IRR (%)" color="#16a34a" />
             </div>
           )}
         </div>

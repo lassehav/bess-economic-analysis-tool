@@ -26,13 +26,13 @@ const DEFAULT_INPUTS: Inputs = {
   },
   costs: {
     batteryCapexPerKWh: 200,
-    pcsCapexPerKW: 80,
-    bopCapexPercentOfBatteryPcs: 20,
+    pcsCapex: 800_000,
+    bopCapex: 1_760_000,
     developmentCapexPercent: 8,
     contingencyPercent: 10,
     pcsReplacementIntervalYears: 12,
     pcsReplacementCostPercentOfPcs: 80,
-    fixedOmPerKWPerYear: 6,
+    fixedOmPerYear: 60_000,
     variableOmPerMWhThroughput: 0.5,
     insurancePercentOfCapexPerYear: 0.5,
     landLeasePerYear: 0,
@@ -297,7 +297,7 @@ function exportCashflowCsv(inputs: Inputs, streams: AnnualStream[], financials: 
     ['EBITDA (€)', ...rows.map((r) => r.year === 0 ? '' : Math.round(r.ebitda))],
     [`Depreciation (${inputs.finance.depreciationYears}yr SL) (€)`, ...rows.map((r) => r.year === 0 ? '' : -Math.round(r.depreciation))],
     ['EBIT (€)', ...rows.map((r) => r.year === 0 ? '' : Math.round(r.ebit))],
-    ['NOL Carryforward (€)', ...rows.map((r) => r.year === 0 || r.nolCarryforward === 0 ? '' : -Math.round(r.nolCarryforward))],
+    ['Net Operating Loss Carryforward (€)', ...rows.map((r) => r.year === 0 || r.nolCarryforward === 0 ? '' : -Math.round(r.nolCarryforward))],
     [`Income Tax (${inputs.finance.taxRate}%) (€)`, ...rows.map((r) => r.year === 0 ? '' : -Math.round(r.tax))],
     ['Residual Value (€)', ...rows.map((r) => r.residualValue === 0 ? '' : Math.round(r.residualValue))],
     ['--- Cash Flow ---'],
@@ -578,6 +578,18 @@ export default function SimulationView() {
     if (!priceSeries) return
     setStatus('running')
     setCyclicWrap(false)
+
+    // Re-read inputs from localStorage so changes made in Parameters tab are picked up.
+    let currentInputs = inputs
+    try {
+      const raw = JSON.parse(localStorage.getItem('bess-analyzer.inputs') ?? '')
+      const parsed = inputsSchema.safeParse(raw)
+      if (parsed.success) {
+        currentInputs = parsed.data
+        setInputs(parsed.data)
+      }
+    } catch { /* ignore */ }
+
     try {
       let days: DailyPriceParams[]
       let scenarioName: string | undefined
@@ -594,13 +606,13 @@ export default function SimulationView() {
         days = buildHistoricalDays(
           priceSeries,
           replayStartDate,
-          inputs.finance.projectLifeYears,
+          currentInputs.finance.projectLifeYears,
           () => setCyclicWrap(true),
         )
       }
 
-      const sim = runProjectSimulation(inputs, days)
-      const financials = computeFinancials(inputs, sim.streams)
+      const sim = runProjectSimulation(currentInputs, days)
+      const financials = computeFinancials(currentInputs, sim.streams)
       setResult({ streams: sim.streams, retiredAtYear: sim.retiredAtYear, financials, priceMode, ...(scenarioName ? { scenarioName } : {}) })
       setStatus('done')
     } catch {

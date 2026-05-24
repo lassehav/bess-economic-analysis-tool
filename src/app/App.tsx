@@ -1,10 +1,11 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import HistoricalView from '../features/historical/HistoricalView'
 import ParametersView from '../features/parameters/ParametersView'
 import SimulationView from '../features/simulation/SimulationView'
 import ScenariosView from '../features/scenarios/ScenariosView'
 import SensitivityView from '../features/sensitivity/SensitivityView'
 import MonteCarloView from '../features/montecarlo/MonteCarloView'
+import ResultsView from '../features/results/ResultsView'
 import type { MultiYearForecastOutput } from '../core/forecast/types'
 
 const TABS = [
@@ -56,31 +57,66 @@ type TabId = (typeof TABS)[number]['id']
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabId>('historical')
+  const [mountedTabs, setMountedTabs] = useState<Set<TabId>>(new Set<TabId>(['historical']))
   const [forecastOutput, setForecastOutput] = useState<MultiYearForecastOutput | null>(null)
+  const [darkMode, setDarkMode] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('bess-analyzer.theme') === 'dark'
+    } catch { return false }
+  })
+
+  // Apply/remove the `dark` class on <html> whenever darkMode changes
+  useEffect(() => {
+    const root = document.documentElement
+    if (darkMode) {
+      root.classList.add('dark')
+    } else {
+      root.classList.remove('dark')
+    }
+    try {
+      localStorage.setItem('bess-analyzer.theme', darkMode ? 'dark' : 'light')
+    } catch { /* ignore */ }
+  }, [darkMode])
 
   const currentIndex = TABS.findIndex((t) => t.id === activeTab)
   const nextTab = TABS[currentIndex + 1] ?? null
 
+  function handleTabChange(tabId: TabId) {
+    setActiveTab(tabId)
+    setMountedTabs((prev) => new Set([...prev, tabId]))
+  }
+
   return (
-    <div className="min-h-screen bg-white text-black">
-      <header className="border-b border-black px-6 py-4">
-        <h1 className="text-xl font-semibold tracking-tight">BESS Analyzer | Lasse Haverinen</h1>
-        <p className="mt-0.5 text-sm text-gray-500">
-          Battery Energy Storage — LCOS &amp; Economic Profitability
-        </p>
+    <div className="min-h-screen bg-white dark:bg-gray-900 text-black dark:text-gray-100 transition-colors">
+      <header className="border-b border-black dark:border-gray-700 px-6 py-4 flex items-start justify-between">
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight">BESS Analyzer | Lasse Haverinen</h1>
+          <p className="mt-0.5 text-sm text-gray-500 dark:text-gray-400">
+            Battery Energy Storage — LCOS &amp; Economic Profitability
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setDarkMode((v) => !v)}
+          title={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+          className="ml-4 mt-0.5 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-2.5 py-1.5 text-sm hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors select-none"
+          aria-label="Toggle dark mode"
+        >
+          {darkMode ? '☀ Light' : '☾ Dark'}
+        </button>
       </header>
 
-      <nav className="border-b border-black px-6">
+      <nav className="app-nav border-b border-black dark:border-gray-700 px-6 bg-white dark:bg-gray-900">
         <div className="flex gap-1 overflow-x-auto">
           {TABS.map((tab) => (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => handleTabChange(tab.id)}
               className={[
                 'whitespace-nowrap px-4 py-3 text-sm font-medium transition-colors',
                 activeTab === tab.id
                   ? 'border-b-2 border-blue-600 text-blue-600'
-                  : 'text-gray-500 hover:text-black',
+                  : 'text-gray-500 dark:text-gray-400 hover:text-black dark:hover:text-white',
               ].join(' ')}
             >
               <span className="mr-1.5 font-normal opacity-50">{tab.step}.</span>
@@ -90,40 +126,57 @@ export default function App() {
         </div>
       </nav>
 
-      <main className="p-6">
+      <main className="p-6 bg-white dark:bg-gray-900 min-h-screen">
         <div className="flex flex-col gap-6">
-          {activeTab === 'historical' ? (
-            <HistoricalView />
-          ) : activeTab === 'parameters' ? (
-            <ParametersView />
-          ) : activeTab === 'simulation' ? (
-            <SimulationView />
-          ) : activeTab === 'scenarios' ? (
-            <ScenariosView
-              forecastOutput={forecastOutput}
-              onForecastOutputChange={setForecastOutput}
-              onNavigateToSimulation={() => setActiveTab('simulation')}
-            />
-          ) : activeTab === 'sensitivity' ? (
-            <SensitivityView />
-          ) : activeTab === 'montecarlo' ? (
-            <MonteCarloView />
-          ) : (
-            <div className="rounded-lg border border-gray-200 p-8 text-center text-gray-400">
-              <p className="text-lg font-medium text-black">{TABS.find((t) => t.id === activeTab)?.label}</p>
-              <p className="mt-2 text-sm">This section will be implemented in a later phase.</p>
+          {mountedTabs.has('historical') && (
+            <div className={activeTab !== 'historical' ? 'hidden' : ''}>
+              <HistoricalView />
+            </div>
+          )}
+          {mountedTabs.has('parameters') && (
+            <div className={activeTab !== 'parameters' ? 'hidden' : ''}>
+              <ParametersView />
+            </div>
+          )}
+          {mountedTabs.has('scenarios') && (
+            <div className={activeTab !== 'scenarios' ? 'hidden' : ''}>
+              <ScenariosView
+                forecastOutput={forecastOutput}
+                onForecastOutputChange={setForecastOutput}
+                onNavigateToSimulation={() => handleTabChange('simulation')}
+              />
+            </div>
+          )}
+          {mountedTabs.has('simulation') && (
+            <div className={activeTab !== 'simulation' ? 'hidden' : ''}>
+              <SimulationView />
+            </div>
+          )}
+          {mountedTabs.has('sensitivity') && (
+            <div className={activeTab !== 'sensitivity' ? 'hidden' : ''}>
+              <SensitivityView />
+            </div>
+          )}
+          {mountedTabs.has('montecarlo') && (
+            <div className={activeTab !== 'montecarlo' ? 'hidden' : ''}>
+              <MonteCarloView />
+            </div>
+          )}
+          {mountedTabs.has('results') && (
+            <div className={activeTab !== 'results' ? 'hidden' : ''}>
+              <ResultsView />
             </div>
           )}
 
-          {nextTab && nextTab.id !== 'results' && (
-            <div className="border-t border-gray-200 pt-5">
+          {nextTab && (
+            <div className="border-t border-gray-200 dark:border-gray-700 pt-5">
               <div className="flex items-center justify-between">
-                <p className="text-sm text-gray-400">
-                  Next: <span className="font-medium text-gray-600">Step {nextTab.step} — {nextTab.label}</span>
-                  <span className="ml-2 text-gray-400">{nextTab.description}</span>
+                <p className="text-sm text-gray-400 dark:text-gray-500">
+                  Next: <span className="font-medium text-gray-600 dark:text-gray-300">Step {nextTab.step} — {nextTab.label}</span>
+                  <span className="ml-2 text-gray-400 dark:text-gray-500">{nextTab.description}</span>
                 </p>
                 <button
-                  onClick={() => setActiveTab(nextTab.id)}
+                  onClick={() => handleTabChange(nextTab.id)}
                   className="flex items-center gap-2 rounded bg-blue-600 px-5 py-2 text-sm font-medium text-white hover:bg-blue-700"
                 >
                   Move to {nextTab.label}

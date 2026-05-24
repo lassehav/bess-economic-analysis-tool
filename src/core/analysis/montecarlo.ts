@@ -435,12 +435,12 @@ export function DEFAULT_MC_VARIABLES(base: SimulationRequest): MCVariableConfig[
       },
     },
     {
-      key: 'costs.pcsCapexPerKW',
+      key: 'costs.pcsCapex',
       label: 'PCS CAPEX',
       distribution: {
         kind: 'normal',
-        mean: b.costs.pcsCapexPerKW,
-        stddev: b.costs.pcsCapexPerKW * 0.10,
+        mean: b.costs.pcsCapex,
+        stddev: b.costs.pcsCapex * 0.10,
       },
     },
     {
@@ -499,7 +499,7 @@ export function DEFAULT_MC_VARIABLES(base: SimulationRequest): MCVariableConfig[
 }
 
 export const DEFAULT_MC_CORRELATIONS: MCCorrelation[] = [
-  { varA: 'costs.batteryCapexPerKWh', varB: 'costs.pcsCapexPerKW', rho: 0.5 },
+  { varA: 'costs.batteryCapexPerKWh', varB: 'costs.pcsCapex', rho: 0.5 },
   { varA: 'scenario.year1.meanLevelMultiplier', varB: 'scenario.year1.spreadMultiplier', rho: 0.3 },
 ]
 
