@@ -11,6 +11,7 @@ export const batteryInputsSchema = z.object({
   calendarLifeYears: z.number().gte(1).lte(30),
   cyclesPerDayPenaltyExponent: z.number().gte(0.5).lte(3.0),
   endOfLifeSoH: z.number().gt(0).lt(1),
+  activationThreshold: z.number().gte(0.5).lte(3.0).optional(),
 })
 
 export const costInputsSchema = z.object({
@@ -46,5 +47,5 @@ export const inputsSchema = z.object({
 })
 
 export function parseInputs(raw: unknown): Inputs {
-  return inputsSchema.parse(raw)
+  return inputsSchema.parse(raw) as Inputs
 }

@@ -68,7 +68,8 @@ export function runDailyStep(
   const capexTotal = computeCapex(inputs).total
   const lifetimeThroughputMWh = energyMWh * dod * nominalCycleLifeEFC
   const mdcInternal = lifetimeThroughputMWh > 0 ? capexTotal / lifetimeThroughputMWh : Infinity
-  const mdcThreshold = mdcInternal * sqrtEta
+  const activationMult = inputs.battery.activationThreshold ?? 1.0
+  const mdcThreshold = mdcInternal * sqrtEta * activationMult
 
   const sortedWindows = daily.windows
     .slice()

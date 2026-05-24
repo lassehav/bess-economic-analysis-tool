@@ -8,6 +8,7 @@ export type BatteryInputs = {
   calendarLifeYears: number
   cyclesPerDayPenaltyExponent: number
   endOfLifeSoH: number
+  activationThreshold?: number | undefined  // multiplier on MDC threshold; default 1.0; >1 = more conservative
 }
 
 export type CostInputs = {

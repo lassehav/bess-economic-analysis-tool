@@ -15,7 +15,11 @@ export type YearCapacityParams = {
   solarCapacityMW: number
   windCapacityMW: number
   nuclearCapacityMW: number
+  bessCapacityMWh: number       // MWh usable energy capacity; power = capacity / 4 (4h duration)
+  flexibleLoadMW?: number       // MW of price-responsive demand (district heat boilers, P2H, etc.) that absorbs surplus before curtailment
   priceRandomizer: number       // [-0.20, +0.20]
+  meanLevelMultiplier?: number | undefined  // scales annualMeanPrice for this year; default 1.0
+  spreadMultiplier?: number | undefined     // scales annualMeanSpread for this year; default 1.0
 }
 
 export type ScenarioProfile = {
@@ -27,7 +31,7 @@ export type ScenarioProfile = {
   years: YearCapacityParams[]
 }
 
-export type SimulationEventType = 'structural_shift' | 'stochastic_outage' | 'dunkelflaute_shock'
+export type SimulationEventType = 'structural_shift' | 'stochastic_outage' | 'dunkelflaute_shock' | 'curtailment_event'
 export type SimulationEventSeverity = 'info' | 'warning' | 'critical'
 
 export type SimulationEvent = {

@@ -1,4 +1,9 @@
-import type { HistoricalCalibration, ScenarioProfile, MultiYearForecastOutput, SimulationEvent } from './types'
+import type {
+  HistoricalCalibration,
+  MultiYearForecastOutput,
+  ScenarioProfile,
+  SimulationEvent,
+} from './types'
 import { makePrng, makeNormalPrng } from './prng'
 
 const MONTH_DAY_ENDS = [31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 365]
@@ -11,125 +16,378 @@ function dayOfYearToMonthIdx(dayOfYear: number): number {
   return 11
 }
 
-// Finnish seasonal wind capacity factors (Jan–Dec)
-const WIND_CF_BY_MONTH = [0.42, 0.40, 0.35, 0.28, 0.22, 0.18, 0.16, 0.20, 0.27, 0.33, 0.38, 0.43]
+function isSummerMonth(monthIdx: number): boolean {
+  return monthIdx >= 3 && monthIdx <= 8
+}
 
-// Solar: [sunrise_hour, sunset_hour] per month and peak insolation CF
-const SOLAR_WINDOW: [number, number][] = [
-  [9, 15], [8, 16], [7, 18], [6, 19], [5, 21], [4, 22],
-  [5, 21], [6, 20], [7, 18], [8, 16], [9, 15], [10, 14],
-]
-const SOLAR_PEAK_CF = [0.05, 0.10, 0.20, 0.35, 0.50, 0.65, 0.65, 0.55, 0.35, 0.18, 0.07, 0.04]
+type PlannedOutage = {
+  startDay: number
+  endDay: number
+  assetType: 'nuclear' | 'wind'
+  reductionFraction: number
+  emitted: boolean
+}
 
-function solarCF(m: number, h: number, insolation: number): number {
-  const [sunStart, sunEnd] = SOLAR_WINDOW[m]!
-  if (h < sunStart || h >= sunEnd) return 0
-  const phase = (h - sunStart + 0.5) / (sunEnd - sunStart)
-  return Math.max(0, insolation * SOLAR_PEAK_CF[m]! * Math.sin(Math.PI * phase))
+type PlannedDunkelflaute = {
+  startDay: number
+  endDay: number
+  emitted: boolean
+}
+
+function planOutages(totalDays: number, uniform: () => number): PlannedOutage[] {
+  const outages: PlannedOutage[] = []
+  let nextStart = Math.floor((0.5 + uniform() * 2.0) * 365)
+  while (nextStart < totalDays) {
+    const duration = 7 + Math.floor(uniform() * 25) 
+    const assetType = uniform() < 0.6 ? 'nuclear' : 'wind'
+    const reductionFraction = 0.3 + uniform() * 0.4 
+    outages.push({ startDay: nextStart, endDay: nextStart + duration, assetType, reductionFraction, emitted: false })
+    nextStart = nextStart + duration + Math.floor((1.5 + uniform() * 2.0) * 365)
+  }
+  return outages
+}
+
+function planDunkelflauteEvents(totalDays: number, uniform: () => number): PlannedDunkelflaute[] {
+  const events: PlannedDunkelflaute[] = []
+  let nextStart = Math.floor((2.0 + uniform() * 2.0) * 365)
+  while (nextStart < totalDays) {
+    const yearIdx = Math.floor(nextStart / 365)
+    const dayInYear = nextStart - yearIdx * 365 
+    const octStart = yearIdx * 365 + 273 
+    const snapped = (dayInYear > 90 && dayInYear < 273) ? octStart : nextStart
+    if (snapped >= totalDays) break
+
+    const duration = 5 + Math.floor(uniform() * 10) 
+    events.push({ startDay: snapped, endDay: snapped + duration, emitted: false })
+    nextStart = snapped + duration + Math.floor((4.0 + uniform() * 2.0) * 365)
+  }
+  return events
 }
 
 export function generateForecast(
   calibration: HistoricalCalibration,
   profile: ScenarioProfile,
-  seed = 42,
+  seed: number,
 ): MultiYearForecastOutput {
   const uniform = makePrng(seed)
   const normal = makeNormalPrng(uniform)
 
-  const { diurnalByMonth, monthLevel, dayOfWeekLevel, annualMeanPrice, residualAr1, residualSigma } = calibration
+  const {
+    diurnalByMonth,
+    monthLevel,
+    dayOfWeekLevel,
+    annualMeanPrice,
+    annualMeanSpread,
+    residualAr1,
+    residualSigma,
+  } = calibration
 
-  const totalYears = profile.years.length
-  const totalHours = totalYears * 365 * 24
+  const yearParams = profile.years
+  const totalYears = yearParams.length
+  const totalDays = totalYears * 365
+  const totalHours = totalDays * 24
   const hourlyPrices = new Float64Array(totalHours)
   const events: SimulationEvent[] = []
 
+  const outages = planOutages(totalDays, uniform)
+  const dunkelflauteEvents = planDunkelflauteEvents(totalDays, uniform)
+
+  const dailyNuclearMultiplier = new Float32Array(totalDays).fill(1.0)
+  const dailyWindMultiplier = new Float32Array(totalDays).fill(1.0)
+  const dailyDunkelflauteActive = new Uint8Array(totalDays).fill(0)
+
+  for (const outage of outages) {
+    const end = Math.min(totalDays, outage.endDay)
+    for (let day = outage.startDay; day < end; day++) {
+      if (outage.assetType === 'nuclear') {
+        dailyNuclearMultiplier[day] = 1.0 - outage.reductionFraction
+      } else {
+        dailyWindMultiplier[day] = 1.0 - outage.reductionFraction
+      }
+    }
+  }
+
+  for (const df of dunkelflauteEvents) {
+    const end = Math.min(totalDays, df.endDay)
+    for (let day = df.startDay; day < end; day++) {
+      dailyDunkelflauteActive[day] = 1
+    }
+  }
+
   let ar1State = 0
   let eventCounter = 0
-  // Declared outside year loop so a dunkelflaute can span a year boundary
-  let dunkelflauteDaysLeft = 0
-  // ~1 event per 6 years; winter window ≈ 150 days → rate per winter day
-  const DUNK_PROB_PER_WINTER_DAY = 1.0 / (6.0 * 150)
+  let persistentWindState = 0.7
+  let inOversupplyEvent = false
+  let oversupplyStartHour = 0
+  let consecutiveNegativeHours = 0 
+
+  const BESS_ROUND_TRIP_EFFICIENCY = 0.85
+  const BESS_CHARGE_EFFICIENCY = Math.sqrt(BESS_ROUND_TRIP_EFFICIENCY) 
+  const BESS_DISCHARGE_EFFICIENCY = Math.sqrt(BESS_ROUND_TRIP_EFFICIENCY)
+  let bessSoCMWh = 0
 
   for (let y = 0; y < totalYears; y++) {
-    const params = profile.years[y]!
-    const { maxPowerConsumption, constantBaseload, windCapacityMW, solarCapacityMW, nuclearCapacityMW, priceRandomizer } = params
+    const params = yearParams[y]!
+    const {
+      maxPowerConsumption,
+      constantBaseload,
+      solarCapacityMW,
+      windCapacityMW,
+      nuclearCapacityMW,
+      priceRandomizer,
+    } = params
+
+    const BESS_MAX_CAPACITY_MWH = params.bessCapacityMWh ?? 1000
+    const BESS_MAX_POWER_MW = BESS_MAX_CAPACITY_MWH / 4
+    const FLEXIBLE_LOAD_MW = params.flexibleLoadMW ?? 0
+
+    // ─── CRITICAL SYSTEMIC EQUILIBRIUM ADJUSTMENT ───────────────────────────
+    const systemBessRatio = BESS_MAX_CAPACITY_MWH / 1000
+    const systemLoadRatio = constantBaseload / 9500
+
+    // Much more aggressive structural dampening factor. 
+    // As BESS scales to 2,000MWh, this drops from 1.0 down toward 0.35
+    const peakSpreadDampener = Math.max(
+      0.20,
+      1.0 / (1.0 + 0.85 * (systemBessRatio - 1.0) + 0.4 * (systemLoadRatio - 1.0))
+    )
+
     const yearHourBase = y * 365 * 24
 
-    // Step 1: Year-level structural parameters
-    const deltaBase = 80 * (constantBaseload - nuclearCapacityMW) / maxPowerConsumption
-    const Rrenew = (windCapacityMW + solarCapacityMW) / maxPowerConsumption
-    const volatilityMult = 1.0 + 0.6 * Rrenew
-
-    // Randomizer magnitude is unsigned; direction is drawn once per year
-    const yearRandomizer = (uniform() < 0.5 ? 1 : -1) * priceRandomizer
-
     for (let d = 0; d < 365; d++) {
-      const m = dayOfYearToMonthIdx(d + 1)
-      const dow = (y * 365 + d) % 7
+      const currentDay = y * 365 + d
+      const dayOfYear = d + 1
+      const monthIdx = dayOfYearToMonthIdx(dayOfYear)
+      const dowIdx = (currentDay % 7) as 0 | 1 | 2 | 3 | 4 | 5 | 6
       const hourBase = yearHourBase + d * 24
-      const isWinterDay = m >= 10 || m <= 2  // Nov–Mar
 
-      // Roll for a new dunkelflaute event (winter only, not while one is active)
-      if (isWinterDay && dunkelflauteDaysLeft === 0 && uniform() < DUNK_PROB_PER_WINTER_DAY) {
-        const duration = 5 + Math.floor(uniform() * 26)  // 5–30 days
-        dunkelflauteDaysLeft = duration
-        const endHour = Math.min(hourBase + duration * 24, totalHours)
-        const impact = Math.round(500 * Math.pow((maxPowerConsumption - nuclearCapacityMW) / maxPowerConsumption, 2) * volatilityMult)
-        events.push({
-          id: `dunkelflaute-${++eventCounter}`,
-          type: 'dunkelflaute_shock',
-          severity: 'critical',
-          title: 'Windless Winter Freeze',
-          description: `Persistent high-pressure system eliminates wind output for ${duration} days. Physical supply gap drives extreme scarcity prices.`,
-          startHourIndex: hourBase,
-          endHourIndex: endHour,
-          metricDelta: { priceImpactEur: impact },
-        })
+      ar1State = residualAr1 * ar1State + residualSigma * normal()
+      persistentWindState = 0.85 * persistentWindState + 0.15 * uniform()
+      const dailyWindCf = 0.05 + persistentWindState * 0.9
+
+      const dailyInsolation = isSummerMonth(monthIdx)
+        ? 0.4 + uniform() * 0.6
+        : 0.1 + uniform() * 0.4
+
+      const baseShape = diurnalByMonth[monthIdx] ?? diurnalByMonth[0]!
+      const mLevel = monthLevel[monthIdx] ?? 1
+      const wLevel = dayOfWeekLevel[dowIdx] ?? 1
+      
+      // Lift the structural baseline floor price as constant datacenters gobble up capacity
+      const meanShiftFactor = 1.0 + 0.18 * (systemLoadRatio - 1.0)
+      const effectiveMeanPrice = annualMeanPrice * (params.meanLevelMultiplier ?? 1.0) * meanShiftFactor
+      const effectiveMeanSpread = annualMeanSpread * (params.spreadMultiplier ?? 1.0)
+      const muDayBase = effectiveMeanPrice * mLevel * wLevel
+
+      let effectiveNuclearMW = Math.round(nuclearCapacityMW * dailyNuclearMultiplier[currentDay]!)
+      let effectiveWindCapMW = Math.round(windCapacityMW * dailyWindMultiplier[currentDay]!)
+      const isDunkelflauteDay = dailyDunkelflauteActive[currentDay] === 1
+
+      if (isDunkelflauteDay) {
+        effectiveWindCapMW = Math.round(effectiveWindCapMW * 0.15)
       }
 
-      // AR(1) daily residual in €/MWh space
-      ar1State = residualAr1 * ar1State + residualSigma * normal()
+      for (const outage of outages) {
+        if (currentDay === outage.startDay && !outage.emitted) {
+          outage.emitted = true
+          const assetLabel = outage.assetType === 'nuclear' ? 'Nuclear Plant' : 'Wind Farm'
+          const deratePct = Math.round(outage.reductionFraction * 100)
+          const durationDays = outage.endDay - outage.startDay
+          events.push({
+            id: `outage-${++eventCounter}`,
+            type: 'stochastic_outage',
+            severity: 'warning',
+            title: `${assetLabel} Forced Outage`,
+            description: `Unplanned ${durationDays}-day derating: ${deratePct}% of ${outage.assetType} capacity offline.`,
+            startHourIndex: hourBase,
+            endHourIndex: Math.min(totalHours, hourBase + durationDays * 24),
+            affectedAsset: outage.assetType,
+            metricDelta: {
+              capacityMW: Math.round((outage.assetType === 'nuclear' ? nuclearCapacityMW : windCapacityMW) * outage.reductionFraction),
+            },
+          })
+          break
+        }
+      }
 
-      // Daily weather draws — wind forced very low during dunkelflaute
-      const omega_daily = dunkelflauteDaysLeft > 0
-        ? 0.01 + 0.03 * uniform()  // 1–4% CF during windless freeze
-        : Math.max(0.02, Math.min(0.95, WIND_CF_BY_MONTH[m]! + 0.12 * normal()))
-      const insolation_daily = Math.max(0.05, Math.min(1.5, 1.0 + 0.3 * normal()))
+      for (const df of dunkelflauteEvents) {
+        if (currentDay === df.startDay && !df.emitted) {
+          df.emitted = true
+          const durationDays = df.endDay - df.startDay
+          events.push({
+            id: `dunkelflaute-${++eventCounter}`,
+            type: 'dunkelflaute_shock',
+            severity: 'critical',
+            title: 'Windless Winter Freeze',
+            description: `${durationDays}-day grid-wide wind lull. Dispatchable backup fully loaded, prices elevated.`,
+            startHourIndex: hourBase,
+            endHourIndex: Math.min(totalHours, hourBase + durationDays * 24),
+          })
+          break
+        }
+      }
 
       for (let h = 0; h < 24; h++) {
-        const hourIdx = hourBase + h
+        const hourIndex = hourBase + h
+        const rawDiurnalShape = baseShape[h] ?? 1
 
-        const omega_h = Math.max(0.01, Math.min(0.98, omega_daily + 0.03 * normal()))
-        const sigma_h = solarCF(m, h, insolation_daily)
+        // 1. DYNAMIC DEMAND
+        const isWeekend = dowIdx === 5 || dowIdx === 6
+        const weekendCompression = isWeekend ? 0.4 : 1.0
+        const demandShape = 1.0 + ((rawDiurnalShape - 1.0) * weekendCompression)
 
-        const Prenew = windCapacityMW * omega_h + solarCapacityMW * sigma_h
-        const Gt = maxPowerConsumption - (nuclearCapacityMW + Prenew)
+        const variableLoadCapacity = maxPowerConsumption - constantBaseload
+        const normalizedShape = (demandShape - 0.7) / 0.6
+        const currentHourlyLoad = constantBaseload + variableLoadCapacity * Math.max(0, normalizedShape)
 
-        // Condition A: Dunkelflaute shock — fires naturally because omega is forced low
-        let shockImpact = 0
-        if (Gt > 0 && (omega_h + sigma_h) < 0.08) {
-          shockImpact = 500 * Math.pow(Gt / maxPowerConsumption, 2) * volatilityMult
+        // 2. PHYSICAL GENERATION
+        const economicWindScale = consecutiveNegativeHours > 6 ? 0.35 : 1.0
+        const windNoise = (uniform() - 0.5) * 0.05
+        const omega = Math.max(0, Math.min(1, dailyWindCf + windNoise)) * economicWindScale
+
+        let sigma = 0
+        if (h >= 6 && h <= 20) {
+          const solarShape = Math.max(0, Math.sin(Math.PI * (h - 6) / 14))
+          sigma = solarShape * dailyInsolation
         }
 
-        // Condition B: Oversupply compression
-        let priceCompression = 0
-        if (Gt < -constantBaseload) {
-          priceCompression = 0.015 * (Gt + constantBaseload)  // negative
+        const Prenew = effectiveWindCapMW * omega + solarCapacityMW * sigma
+        const totalGeneration = effectiveNuclearMW + Prenew
+
+        // 3. STATEFUL BATTERY DISPATCH (Dynamic Peak Shaving Adjustment)
+        let actualBatteryAction = 0
+        const netPhysicalGap = currentHourlyLoad - totalGeneration
+
+        if (netPhysicalGap < 0) {
+          const surplus = Math.abs(netPhysicalGap)
+          const availableRoomMWh = BESS_MAX_CAPACITY_MWH - bessSoCMWh
+          const maxPowerChargeLimit = BESS_MAX_POWER_MW
+          const maxCapacityChargeLimit = availableRoomMWh / BESS_CHARGE_EFFICIENCY
+          
+          const chargePowerGridSide = Math.min(surplus, maxPowerChargeLimit, maxCapacityChargeLimit)
+          bessSoCMWh += chargePowerGridSide * BESS_CHARGE_EFFICIENCY
+          actualBatteryAction = -chargePowerGridSide
+        } else {
+          // FIX: Batteries respond dynamically to load shapes to perform structural peak shaving
+          if (demandShape > 1.02 || netPhysicalGap > (maxPowerConsumption * 0.1)) {
+            const maxPowerDischargeLimit = BESS_MAX_POWER_MW
+            const maxCapacityDischargeLimit = bessSoCMWh * BESS_DISCHARGE_EFFICIENCY
+            
+            const dischargePowerBatterySide = Math.min(netPhysicalGap, maxPowerDischargeLimit, maxCapacityDischargeLimit)
+            bessSoCMWh -= (dischargePowerBatterySide / BESS_DISCHARGE_EFFICIENCY)
+            actualBatteryAction = dischargePowerBatterySide
+          }
         }
 
-        // Base hourly price from calibration diurnal shape
-        const diurnalRow = diurnalByMonth[m] ?? diurnalByMonth[0]!
-        const mu_h = annualMeanPrice * (monthLevel[m] ?? 1) * (dayOfWeekLevel[dow % 7] ?? 1) * (diurnalRow[h] ?? 1)
+        // 3b. FLEXIBLE LOAD SECTOR COUPLING
+        let residualGridLoad = netPhysicalGap - actualBatteryAction
+        if (residualGridLoad < 0 && FLEXIBLE_LOAD_MW > 0) {
+          const dynamicFlexLoadCap = consecutiveNegativeHours > 4 ? FLEXIBLE_LOAD_MW * 1.4 : FLEXIBLE_LOAD_MW
+          const flexAbsorption = Math.min(Math.abs(residualGridLoad), dynamicFlexLoadCap)
+          residualGridLoad += flexAbsorption
+        }
+        
+        // 4. PRICE FORMATION
+        const macroNoise = (ar1State / (residualSigma > 0 ? residualSigma : 1)) * effectiveMeanSpread * 0.5 * peakSpreadDampener
+        let basePrice = muDayBase + macroNoise 
+        let finalPrice = basePrice
 
-        // volatilityMult amplifies upward residuals (renewable scarcity peaks) but
-        // not negative ones — downside is governed by priceCompression, not noise amplification
-        const residualContrib = ar1State > 0 ? ar1State * volatilityMult : ar1State
-        const rawPrice = (mu_h + deltaBase + residualContrib + shockImpact + priceCompression) * (1.0 + yearRandomizer)
-        // Finnish market floor: deep negatives occur but rarely below -100 €/MWh
-        hourlyPrices[hourIdx] = Math.max(-100, Math.min(4000, rawPrice))
+        // A. SCARCITY REGIME (Fixed to eliminate artificial unconstrained daily spiking loops)
+        if (residualGridLoad > 0) {
+          if (inOversupplyEvent) {
+            events.push({
+              id: `oversupply-${++eventCounter}`,
+              type: 'curtailment_event',
+              severity: 'warning',
+              title: 'BESS Saturation & Grid Curtailment',
+              description: 'Renewable oversupply filled BESS capacity, forcing grid prices negative and triggering wind curtailment.',
+              startHourIndex: oversupplyStartHour,
+              endHourIndex: hourIndex,
+            })
+            inOversupplyEvent = false
+          }
+
+          // Safe normalized ratio based on total dynamic consumption capacity
+          const scarcityRatio = residualGridLoad / Math.max(1000, maxPowerConsumption)
+          let scarcityPremium = 0
+          
+          if (scarcityRatio > 0.15) {
+            // Apply the aggressive structural peak dampener directly to the exponent output
+            scarcityPremium = 350 * Math.pow(scarcityRatio - 0.15, 2.2) * peakSpreadDampener
+            
+            // Logarithmic ceiling compression limits daily pricing bounds to non-scarcity values 
+            // except during deep systematic lulls (like explicit stochastic events)
+            if (scarcityPremium > 40) {
+              scarcityPremium = 40 + 25 * Math.log10(scarcityPremium - 40 + 1)
+            }
+          } else {
+            // Moderate operational gradient scaling
+            const profileGradient = (demandShape - 1.0) * 45 * peakSpreadDampener
+            basePrice = muDayBase + profileGradient + macroNoise
+          }          
+          finalPrice = basePrice + scarcityPremium
+          
+        // B. OVERSUPPLY REGIME
+        } else {
+          const gridSurplus = Math.abs(residualGridLoad)
+
+          if (gridSurplus > 0) {
+            const surplusRatio = gridSurplus / Math.max(1000, maxPowerConsumption)
+            let rawPrice = muDayBase - (surplusRatio * (muDayBase * 1.2) * peakSpreadDampener)
+
+            const diurnalRelief = (demandShape - 1.0) * (muDayBase * 0.8) * peakSpreadDampener
+            rawPrice += diurnalRelief
+            rawPrice += macroNoise * 0.1
+
+            const curtailmentFloor = -10.0
+            
+            if (rawPrice < curtailmentFloor) {
+              const overshoot = Math.abs(rawPrice - curtailmentFloor)
+              finalPrice = curtailmentFloor - (Math.sqrt(overshoot) * peakSpreadDampener)
+            } else {
+              finalPrice = rawPrice
+            }
+
+            finalPrice = Math.max(-50, finalPrice)
+
+            if (!inOversupplyEvent) {
+              inOversupplyEvent = true
+              oversupplyStartHour = hourIndex
+            }
+          } else {
+            finalPrice = Math.max(15.0, basePrice * 0.4)
+            
+            if (inOversupplyEvent) {
+              events.push({
+                id: `oversupply-${++eventCounter}`,
+                type: 'curtailment_event',
+                severity: 'warning',
+                title: 'BESS Saturation & Grid Curtailment',
+                description: 'Renewable oversupply filled BESS capacity, forcing grid prices negative and triggering wind curtailment.',
+                startHourIndex: oversupplyStartHour,
+                endHourIndex: hourIndex,
+              })
+              inOversupplyEvent = false
+            }
+          }
+        }
+
+        // 5. DUNKELFLAUTE OVERRIDE (Systemic events keep real extreme volatility spikes intact)
+        if (isDunkelflauteDay) {
+          const shockPremium = 130 + (Math.pow(demandShape, 2.0) * 80)
+          finalPrice += shockPremium
+          finalPrice = Math.max(140, finalPrice)
+        }
+
+        finalPrice = finalPrice * (1.0 + priceRandomizer)
+        hourlyPrices[hourIndex] = Math.max(-300, Math.min(3000, finalPrice))
+
+        if (finalPrice < 0) {
+          consecutiveNegativeHours++
+        } else {
+          consecutiveNegativeHours = 0
+        }
       }
-
-      if (dunkelflauteDaysLeft > 0) dunkelflauteDaysLeft--
     }
   }
 

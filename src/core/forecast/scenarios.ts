@@ -16,6 +16,8 @@ function buildYears(start: CapacityEndpoints, end: CapacityEndpoints, count: num
       nuclearCapacityMW: lerpInt(start.nuclearCapacityMW, end.nuclearCapacityMW, t),
       windCapacityMW: lerpInt(start.windCapacityMW, end.windCapacityMW, t),
       solarCapacityMW: lerpInt(start.solarCapacityMW, end.solarCapacityMW, t),
+      bessCapacityMWh: lerpInt(start.bessCapacityMWh, end.bessCapacityMWh, t),
+      flexibleLoadMW: lerpInt(start.flexibleLoadMW ?? 0, end.flexibleLoadMW ?? 0, t),
       priceRandomizer: 0,
     }
   })
@@ -31,9 +33,9 @@ export const PRESET_SCENARIOS: ScenarioProfile[] = [
     isPreset: true,
     updatedAt: '2026-01-01T00:00:00Z',
     years: buildYears(
-      { maxPowerConsumption: 14000, constantBaseload: 9500, nuclearCapacityMW: 4300, windCapacityMW: 7000, solarCapacityMW: 1000 },
-      { maxPowerConsumption: 20000, constantBaseload: 15500, nuclearCapacityMW: 4300, windCapacityMW: 10000, solarCapacityMW: 3000 },
-      10,
+      { maxPowerConsumption: 14000, constantBaseload: 9500, nuclearCapacityMW: 4300, windCapacityMW: 9433 , solarCapacityMW: 1000, bessCapacityMWh: 1000, flexibleLoadMW: 3000 },
+      { maxPowerConsumption: 30000, constantBaseload: 18000, nuclearCapacityMW: 4300, windCapacityMW: 15000, solarCapacityMW: 3000, bessCapacityMWh: 2000, flexibleLoadMW: 8000 },
+      15,
     ),
   },
   {
@@ -44,9 +46,9 @@ export const PRESET_SCENARIOS: ScenarioProfile[] = [
     isPreset: true,
     updatedAt: '2026-01-01T00:00:00Z',
     years: buildYears(
-      { maxPowerConsumption: 14000, constantBaseload: 9000, nuclearCapacityMW: 4300, windCapacityMW: 7000, solarCapacityMW: 1000 },
-      { maxPowerConsumption: 22000, constantBaseload: 13000, nuclearCapacityMW: 7000, windCapacityMW: 22000, solarCapacityMW: 7000 },
-      10,
+      { maxPowerConsumption: 14000, constantBaseload: 9000, nuclearCapacityMW: 4300, windCapacityMW: 9433, solarCapacityMW: 1000, bessCapacityMWh: 1000, flexibleLoadMW: 3000 },
+      { maxPowerConsumption: 20000, constantBaseload: 11000, nuclearCapacityMW: 7000, windCapacityMW: 13000, solarCapacityMW: 7000, bessCapacityMWh: 1000, flexibleLoadMW: 5000 },
+      15,
     ),
   },
 ]

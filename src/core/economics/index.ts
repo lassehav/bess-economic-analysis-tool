@@ -86,14 +86,23 @@ export function computeAnnualPcsReplacement(
 export type CashflowRow = {
   year: number
   revenue: number
+  // OPEX detail (positive amounts = cost)
+  fixedOM: number
+  variableOM: number
+  insurance: number
+  landLease: number
+  gridFees: number
   opex: number
   pcsReplacement: number
   capex: number
   residualValue: number
   ebitda: number
+  depreciation: number
   ebit: number
+  nolCarryforward: number  // NOL balance remaining at end of year
   tax: number
   cashflow: number
+  discountFactor: number
   discountedCashflow: number
   cumulativeDiscountedCashflow: number
 }
@@ -106,6 +115,7 @@ export function buildCashflow(inputs: Inputs, streams: AnnualStream[]): Cashflow
 
   const rows: CashflowRow[] = []
   let cumulativeDiscounted = 0
+  let nolBalance = 0  // accumulated Net Operating Loss carryforward (DTA)
 
   // Year 0: construction
   const year0Cashflow = -capex.total
@@ -113,19 +123,23 @@ export function buildCashflow(inputs: Inputs, streams: AnnualStream[]): Cashflow
   rows.push({
     year: 0,
     revenue: 0,
+    fixedOM: 0, variableOM: 0, insurance: 0, landLease: 0, gridFees: 0,
     opex: 0,
     pcsReplacement: 0,
     capex: -capex.total,
     residualValue: 0,
     ebitda: 0,
+    depreciation: 0,
     ebit: 0,
+    nolCarryforward: 0,
     tax: 0,
     cashflow: year0Cashflow,
+    discountFactor: 1,
     discountedCashflow: year0Cashflow,
     cumulativeDiscountedCashflow: cumulativeDiscounted,
   })
 
-  const depreciation = capex.total / depreciationYears
+  const annualDepreciation = capex.total / depreciationYears
 
   for (let y = 1; y <= projectLifeYears; y++) {
     const stream = streams.find((s) => s.year === y)
@@ -153,9 +167,20 @@ export function buildCashflow(inputs: Inputs, streams: AnnualStream[]): Cashflow
       : 0
 
     const ebitda = revenue - opexResult.total - pcsResult.pcsReplacementCost
-    const depreciationThisYear = y <= depreciationYears ? depreciation : 0
+    const depreciationThisYear = y <= depreciationYears ? annualDepreciation : 0
     const ebit = ebitda - depreciationThisYear
-    const tax = Math.max(0, ebit * (taxRate / 100))
+
+    // NOL carryforward: losses accumulate into nolBalance and shield future taxable income
+    let taxableEbit = ebit
+    if (ebit < 0) {
+      nolBalance += -ebit
+      taxableEbit = 0
+    } else if (nolBalance > 0) {
+      const nolUsed = Math.min(ebit, nolBalance)
+      nolBalance -= nolUsed
+      taxableEbit = ebit - nolUsed
+    }
+    const tax = taxableEbit * (taxRate / 100)
 
     const cashflow =
       revenue -
@@ -164,21 +189,29 @@ export function buildCashflow(inputs: Inputs, streams: AnnualStream[]): Cashflow
       tax +
       residualValueNominal
 
-    const discountFactor = Math.pow(1 + waccDecimal, y)
-    const discountedCashflow = cashflow / discountFactor
+    const df = Math.pow(1 + waccDecimal, y)
+    const discountedCashflow = cashflow / df
     cumulativeDiscounted += discountedCashflow
 
     rows.push({
       year: y,
       revenue,
+      fixedOM: opexResult.fixedOM,
+      variableOM: opexResult.variableOM,
+      insurance: opexResult.insurance,
+      landLease: opexResult.landLease,
+      gridFees: opexResult.gridFees,
       opex: opexResult.total,
       pcsReplacement: pcsResult.pcsReplacementCost,
       capex: 0,
       residualValue: residualValueNominal,
       ebitda,
+      depreciation: depreciationThisYear,
       ebit,
+      nolCarryforward: nolBalance,
       tax,
       cashflow,
+      discountFactor: 1 / df,
       discountedCashflow,
       cumulativeDiscountedCashflow: cumulativeDiscounted,
     })

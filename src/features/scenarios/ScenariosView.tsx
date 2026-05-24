@@ -476,6 +476,8 @@ function ScenarioTable({
             <th className="py-1.5 px-2 text-right font-semibold text-gray-600">Solar (MW)</th>
             <th className="py-1.5 px-2 text-right font-semibold text-gray-600">Wind (MW)</th>
             <th className="py-1.5 px-2 text-right font-semibold text-gray-600">Nuclear (MW)</th>
+            <th className="py-1.5 px-2 text-right font-semibold text-gray-600">BESS (MWh)</th>
+            <th className="py-1.5 px-2 text-right font-semibold text-gray-600" title="Price-responsive demand that absorbs surplus before curtailment (district heating boilers, P2H electrolyzers, thermal storage)">Flex Load (MW)</th>
             <th className="py-1.5 px-2 text-center font-semibold text-gray-600 w-36">Randomizer</th>
             <th className="py-1.5 px-2 w-6"></th>
           </tr>
@@ -531,6 +533,22 @@ function ScenarioTable({
                     <NumInput
                       value={row.nuclearCapacityMW}
                       onChange={(v) => onUpdate(i, 'nuclearCapacityMW', v)}
+                    />
+                  </div>
+                </td>
+                <td className="py-1 px-2">
+                  <div className="flex justify-end">
+                    <NumInput
+                      value={row.bessCapacityMWh ?? 1000}
+                      onChange={(v) => onUpdate(i, 'bessCapacityMWh', v)}
+                    />
+                  </div>
+                </td>
+                <td className="py-1 px-2">
+                  <div className="flex justify-end">
+                    <NumInput
+                      value={row.flexibleLoadMW ?? 0}
+                      onChange={(v) => onUpdate(i, 'flexibleLoadMW', v)}
                     />
                   </div>
                 </td>
@@ -628,17 +646,46 @@ function SaveAsModal({
 
 // ─── Main ScenariosView ───────────────────────────────────────────────────────
 
-export default function ScenariosView() {
+function getProjectLifeYears(): number {
+  try {
+    const raw = JSON.parse(localStorage.getItem('bess-analyzer.inputs') ?? 'null')
+    if (typeof raw?.finance?.projectLifeYears === 'number') return raw.finance.projectLifeYears
+  } catch { /* ignore */ }
+  return 25
+}
+
+function buildInitialRows(): YearCapacityParams[] {
+  const profile = getDefaultProfile()
+  const n = getProjectLifeYears()
+  const rows = [...profile.years]
+  while (rows.length < n) {
+    const last = rows[rows.length - 1]!
+    rows.push({ ...last, yearIndex: rows.length })
+  }
+  return rows.slice(0, n)
+}
+
+export default function ScenariosView({
+  onNavigateToSimulation,
+  forecastOutput,
+  onForecastOutputChange,
+}: {
+  onNavigateToSimulation?: () => void
+  forecastOutput: MultiYearForecastOutput | null
+  onForecastOutputChange: (output: MultiYearForecastOutput | null) => void
+}) {
+  const output = forecastOutput
+  const setOutput = onForecastOutputChange
+
   const [series, setSeries] = useState<PriceSeries | null>(null)
-  const [tableRows, setTableRows] = useState<YearCapacityParams[]>(() => getDefaultProfile().years)
-  const [baselineJson, setBaselineJson] = useState<string>(() => JSON.stringify(getDefaultProfile().years))
+  const [tableRows, setTableRows] = useState<YearCapacityParams[]>(buildInitialRows)
+  const [baselineJson, setBaselineJson] = useState<string>(() => JSON.stringify(buildInitialRows()))
   const [activeMeta, setActiveMeta] = useState<Omit<ScenarioProfile, 'years'>>(() => {
     const p = getDefaultProfile()
     return { id: p.id, name: p.name, description: p.description, isPreset: p.isPreset, updatedAt: p.updatedAt }
   })
   const [customProfiles, setCustomProfiles] = useState<ScenarioProfile[]>(loadCustomProfiles)
   const [seed, setSeed] = useState(42)
-  const [output, setOutput] = useState<MultiYearForecastOutput | null>(null)
   const [running, setRunning] = useState(false)
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<'forecast' | 'backtest'>('forecast')
@@ -753,6 +800,7 @@ export default function ScenariosView() {
     setTimeout(() => {
       try {
         const profile: ScenarioProfile = { ...activeMeta, years: tableRows }
+        localStorage.setItem('bess-analyzer.activeScenario', JSON.stringify(profile))
         const result = runForecast(series, profile, seed)
         setOutput(result)
         setSelectedEventId(null)
@@ -869,10 +917,10 @@ export default function ScenariosView() {
             <input
               type="number"
               min={1}
-              max={25}
+              max={40}
               value={tableRows.length}
               onChange={(e) => {
-                const n = Math.max(1, Math.min(25, parseInt(e.target.value) || 1))
+                const n = Math.max(1, Math.min(40, parseInt(e.target.value) || 1))
                 setTableRows((prev) => {
                   if (n === prev.length) return prev
                   if (n < prev.length) return prev.slice(0, n)
@@ -908,6 +956,15 @@ export default function ScenariosView() {
           >
             {running ? 'Generating...' : 'Generate forecast'}
           </button>
+          {output && onNavigateToSimulation && (
+            <button
+              type="button"
+              onClick={onNavigateToSimulation}
+              className="rounded border border-blue-600 px-4 py-1.5 text-sm font-medium text-blue-600 hover:bg-blue-50"
+            >
+              Move to Simulation →
+            </button>
+          )}
           {!series && <span className="text-xs text-gray-400">Loading data...</span>}
         </div>
       </div>

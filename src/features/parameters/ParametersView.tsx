@@ -39,7 +39,7 @@ const PRESET_LFP_4H: Inputs = {
     omEscalationPercentPerYear: 0,
   },
   finance: {
-    projectLifeYears: 20,
+    projectLifeYears: 25,
     wacc: 6,
     taxRate: 20,
     depreciationYears: 15,
@@ -203,17 +203,16 @@ function DerivedPanel({ inputs }: { inputs: Inputs }) {
     const totalLifetimeThroughput = battery.energyMWh * battery.dod * battery.nominalCycleLifeEFC
     const pureMdc = totalLifetimeThroughput > 0 ? capex.total / totalLifetimeThroughput : 0
 
-    // SoH(t) at 1 cpd:
-    // degradation formula: fraction_cycle = EFC_at_t / nomLife, fraction_cal = t / calLife
-    // with penalty for cpd=1: penalty = 1^exponent = 1
-    // SoH(t) = max(0, 1 - (1-eol) * (fraction_cycle + fraction_cal))
-    // Using additive model: SoH(t) = 1 - (1-eol) * (EFC_at_t/nomLife + t/calLife)
+    // SoH(t) at 1 cpd — mirrors the engine's daily degradation logic:
+    // whichever mechanism (calendar or cycle) has consumed a larger share of
+    // its rated life drives SoH. Using max() prevents double-counting when
+    // both run simultaneously and matches dailyStep.ts exactly.
     const eol = battery.endOfLifeSoH
     const sohAt = (t: number): number => {
       const efcAtT = 365 * t
       const fracCycle = efcAtT / battery.nominalCycleLifeEFC
       const fracCal = t / battery.calendarLifeYears
-      return Math.max(0, 1 - (1 - eol) * (fracCycle + fracCal))
+      return Math.max(0, 1 - (1 - eol) * Math.max(fracCycle, fracCal))
     }
 
     const eolCapacity = battery.energyMWh * battery.dod * eol
