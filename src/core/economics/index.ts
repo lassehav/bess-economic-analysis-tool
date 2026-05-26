@@ -262,21 +262,6 @@ function computeIrr(cashflows: number[], initialGuess: number): number | null {
   return null
 }
 
-function computeSimplePayback(cashflows: number[]): number | null {
-  let cumulative = 0
-  for (let t = 0; t < cashflows.length; t++) {
-    const cf = cashflows[t] ?? 0
-    const prevCumulative = cumulative
-    cumulative += cf
-    if (cumulative >= 0 && t > 0) {
-      // Linear interpolation
-      const fraction = -prevCumulative / cf
-      return (t - 1) + fraction
-    }
-  }
-  return null
-}
-
 export function computeFinancials(inputs: Inputs, streams: AnnualStream[]): FinancialResults {
   const capex = computeCapex(inputs)
   const cashflow = buildCashflow(inputs, streams)

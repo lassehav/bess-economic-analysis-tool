@@ -435,7 +435,7 @@ function NumInput({
   value: number
   onChange: (v: number) => void
   highlight?: 'error' | 'warning' | null
-  title?: string
+  title?: string | undefined
 }) {
   const cls = highlight === 'error'
     ? 'border-red-400 bg-red-50 focus:ring-red-300'

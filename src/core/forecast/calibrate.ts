@@ -50,18 +50,18 @@ export function calibrateFromHistory(
 
     for (let h = 0; h < 24; h++) {
       const p = prices[h]!
-      mhSum[monthIdx]![h] += p
-      mhCount[monthIdx]![h]++
+      mhSum[monthIdx]![h] = (mhSum[monthIdx]![h] ?? 0) + p
+      mhCount[monthIdx]![h] = (mhCount[monthIdx]![h] ?? 0) + 1
       daySum += p
       if (p < dayMin) dayMin = p
       if (p > dayMax) dayMax = p
     }
 
     const dayMean = daySum / 24
-    mSum[monthIdx] += dayMean
-    mCount[monthIdx]++
-    wSum[dowIdx] += dayMean
-    wCount[dowIdx]++
+    mSum[monthIdx] = (mSum[monthIdx] ?? 0) + dayMean
+    mCount[monthIdx] = (mCount[monthIdx] ?? 0) + 1
+    wSum[dowIdx] = (wSum[dowIdx] ?? 0) + dayMean
+    wCount[dowIdx] = (wCount[dowIdx] ?? 0) + 1
     dailySpreads.push(dayMax - dayMin)
     totalPriceSum += daySum
     totalPriceCount += 24

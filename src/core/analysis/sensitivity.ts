@@ -263,7 +263,7 @@ export function extractMetric(outcome: SimulationOutcome, metric: 'npv' | 'irr' 
       return irrPercentage;
 
     default:
-      const _exhaustiveCheck: never = metric;
+      void (metric as never)
       return 0;
   }
 }

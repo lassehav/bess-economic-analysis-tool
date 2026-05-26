@@ -107,7 +107,6 @@ describe('economics — constant revenue annuity', () => {
         taxRate: 0,
         depreciationYears: 10,
         residualValuePercentOfInitialCapex: 0,
-        vatRecoverable: true,
       },
     }
 
@@ -166,7 +165,6 @@ describe('economics — known LCOS test vector', () => {
         taxRate: 0,
         depreciationYears: 20,
         residualValuePercentOfInitialCapex: 0,
-        vatRecoverable: true,
       },
     }
 

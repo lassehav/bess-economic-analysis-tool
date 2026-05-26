@@ -122,6 +122,7 @@ describe('runDailyStep', () => {
 
     const customState: EngineState = {
       cumulativeEFC: 0,
+      cumulativeEffectiveEFC: 0,
       ageDays: 0,
       sohAtStartOfDay: 0.801,
       retired: false,

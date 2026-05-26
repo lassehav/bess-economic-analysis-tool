@@ -299,7 +299,6 @@ export default function MonteCarloView() {
   const [trials, setTrials] = useState(300)
   const [seed, setSeed] = useState(42)
   const [showConfig, setShowConfig] = useState(true)
-  const [showCorrelations, setShowCorrelations] = useState(false)
   const [status, setStatus] = useState<WorkerStatus>('idle')
   const [progress, setProgress] = useState(0)
   const [result, setResult] = useState<MCResult | null>(null)
