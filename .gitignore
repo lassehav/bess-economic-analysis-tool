@@ -6,3 +6,5 @@ dist
 *.local
 public/data/fi-prices.json
 .DS_Store
+.claude
+docs

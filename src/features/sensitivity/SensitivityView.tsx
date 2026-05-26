@@ -300,6 +300,7 @@ export default function SensitivityView() {
   const [drilldownValues, setDrilldownValues] = useState<number[]>([])
   const [drilldownMetrics, setDrilldownMetrics] = useState<number[]>([])
   const [runHistory, setRunHistory] = useState<RunHistoryEntry[]>([])
+  const [copied, setCopied] = useState(false)
   const runIdRef = useRef(0)
 
   useEffect(() => {
@@ -358,6 +359,29 @@ export default function SensitivityView() {
       executeSimulationSweep(metric)
     }
   }, [metric, priceSeries, executeSimulationSweep])
+
+  function getSensJSON() {
+    if (!result) return null
+    return JSON.stringify({ exportedAt: new Date().toISOString(), metric, result }, null, 2)
+  }
+
+  function handleExportJSON() {
+    const json = getSensJSON()
+    if (!json) return
+    const blob = new Blob([json], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'bess-sensitivity.json'
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  function handleCopyJSON() {
+    const json = getSensJSON()
+    if (!json) return
+    navigator.clipboard.writeText(json).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) }).catch(() => {})
+  }
 
   function handleExplicitRun() {
     executeSimulationSweep(metric)
@@ -424,6 +448,12 @@ export default function SensitivityView() {
           {status === 'done' && <span className="rounded bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">Done</span>}
           {status === 'error' && <span className="rounded bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">Execution Error</span>}
           {!priceSeries && <span className="text-xs text-gray-400">Waiting for historical connection logs...</span>}
+          {result && (
+            <>
+              <button type="button" onClick={handleExportJSON} className="rounded border border-gray-300 px-3 py-1 text-xs text-gray-600 hover:bg-gray-50">Export JSON</button>
+              <button type="button" onClick={handleCopyJSON} className="rounded border border-gray-300 px-3 py-1 text-xs text-gray-600 hover:bg-gray-50">{copied ? 'Copied!' : 'Copy JSON'}</button>
+            </>
+          )}
         </div>
       </div>
 

@@ -304,6 +304,7 @@ export default function MonteCarloView() {
   const [progress, setProgress] = useState(0)
   const [result, setResult] = useState<MCResult | null>(null)
   const [enabledKeys, setEnabledKeys] = useState<Set<string>>(new Set())
+  const [copied, setCopied] = useState(false)
   const [defaultVars, setDefaultVars] = useState<MCVariableConfig[]>([])
 
   const workerRef = useRef<Worker | null>(null)
@@ -401,6 +402,29 @@ export default function MonteCarloView() {
     worker.postMessage(req)
   }, [priceSeries, defaultVars, activeVariablesPayload, activeCorrelationsPayload, trials, seed])
 
+  function getMCJSON() {
+    if (!result) return null
+    return JSON.stringify({ exportedAt: new Date().toISOString(), trials, seed, result }, null, 2)
+  }
+
+  function handleExportJSON() {
+    const json = getMCJSON()
+    if (!json) return
+    const blob = new Blob([json], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'bess-montecarlo.json'
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  function handleCopyJSON() {
+    const json = getMCJSON()
+    if (!json) return
+    navigator.clipboard.writeText(json).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) }).catch(() => {})
+  }
+
   const handleCancel = useCallback(() => {
     if (workerRef.current) {
       workerRef.current.terminate()
@@ -447,6 +471,12 @@ export default function MonteCarloView() {
         {status === 'done' && <span className="rounded bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">Done — {trials} trials</span>}
         {status === 'cancelled' && <span className="rounded bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-700">Cancelled</span>}
         {status === 'error' && <span className="rounded bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">Error</span>}
+        {result && (
+          <>
+            <button type="button" onClick={handleExportJSON} className="ml-auto rounded border border-gray-300 px-3 py-1 text-xs text-gray-600 hover:bg-gray-50">Export JSON</button>
+            <button type="button" onClick={handleCopyJSON} className="rounded border border-gray-300 px-3 py-1 text-xs text-gray-600 hover:bg-gray-50">{copied ? 'Copied!' : 'Copy JSON'}</button>
+          </>
+        )}
       </div>
 
       {/* Progress Bar Container */}

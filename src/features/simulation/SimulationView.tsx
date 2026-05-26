@@ -560,6 +560,7 @@ export default function SimulationView() {
   const [result, setResult] = useState<SimResult | null>(null)
   const [status, setStatus] = useState<'idle' | 'running' | 'done'>('idle')
   const [cyclicWrap, setCyclicWrap] = useState(false)
+  const [copied, setCopied] = useState(false)
 
   useEffect(() => {
     fetch('/data/fi-prices.json')
@@ -573,6 +574,37 @@ export default function SimulationView() {
       if (parsed.success) setInputs(parsed.data)
     } catch { /* ignore */ }
   }, [])
+
+  function getSimJSON() {
+    if (!result) return null
+    return JSON.stringify({
+      exportedAt: new Date().toISOString(),
+      priceMode: result.priceMode,
+      scenarioName: result.scenarioName,
+      retiredAtYear: result.retiredAtYear,
+      financials: result.financials,
+      streams: result.streams,
+    }, null, 2)
+  }
+
+  function handleExportJSON() {
+    const json = getSimJSON()
+    if (!json) return
+    const blob = new Blob([json], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'bess-simulation.json'
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  function handleCopyJSON() {
+    const json = getSimJSON()
+    if (!json) return
+    navigator.clipboard.writeText(json).then(() => setCopied(true)).catch(() => {})
+    setTimeout(() => setCopied(false), 1500)
+  }
 
   function handleRun() {
     if (!priceSeries) return
@@ -665,6 +697,12 @@ export default function SimulationView() {
         </button>
         <StatusChip status={status} />
         {!priceSeries && <span className="text-xs text-gray-400">Waiting for price data...</span>}
+        {result && (
+          <>
+            <button type="button" onClick={handleExportJSON} className="ml-auto rounded border border-gray-300 px-3 py-1 text-xs text-gray-600 hover:bg-gray-50">Export JSON</button>
+            <button type="button" onClick={handleCopyJSON} className="rounded border border-gray-300 px-3 py-1 text-xs text-gray-600 hover:bg-gray-50">{copied ? 'Copied!' : 'Copy JSON'}</button>
+          </>
+        )}
       </div>
 
       <div className="flex gap-4">
