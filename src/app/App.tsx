@@ -89,11 +89,29 @@ export default function App() {
   return (
     <div className="min-h-screen bg-white dark:bg-gray-900 text-black dark:text-gray-100 transition-colors">
       <header className="border-b border-black dark:border-gray-700 px-6 py-4 flex items-start justify-between">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">BESS Analyzer | Lasse Haverinen</h1>
-          <p className="mt-0.5 text-sm text-gray-500 dark:text-gray-400">
-            Battery Energy Storage — LCOS &amp; Economic Profitability
-          </p>
+        <div className="flex items-center gap-3">
+          <img
+            src="/images/verkkoaisti-logo.svg"
+            alt=""
+            aria-hidden
+            className="h-10 w-10 shrink-0"
+          />
+          <div>
+            <h1 className="text-xl font-semibold tracking-tight">
+              BESS Analyzer |{' '}
+              <a
+                href="https://www.verkkoaisti.fi"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 hover:underline"
+              >
+                Verkkoaisti.fi
+              </a>
+            </h1>
+            <p className="mt-0.5 text-sm text-gray-500 dark:text-gray-400">
+              Battery Energy Storage — LCOS &amp; Economic Profitability
+            </p>
+          </div>
         </div>
         <button
           type="button"
