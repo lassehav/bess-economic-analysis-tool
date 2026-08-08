@@ -18,7 +18,7 @@ export type SimulationOutcome = {
   lcos: number
   simplePaybackYears: number | null
   discountedPaybackYears: number | null
-  totalRevenueNominal: number
+  totalRevenueReal: number
   endOfYearSoH_atYear20: number
   retiredAtYear: number | null
 }
@@ -61,7 +61,7 @@ export function runSingle(req: SimulationRequest): SimulationOutcome {
     lcos: fin.lcos,
     simplePaybackYears: fin.simplePaybackYears,
     discountedPaybackYears: fin.discountedPaybackYears,
-    totalRevenueNominal: fin.totalRevenueNominal,
+    totalRevenueReal: fin.totalRevenueReal,
     endOfYearSoH_atYear20: lastStream?.endOfYearSoH ?? 0,
     retiredAtYear: sim.retiredAtYear,
   }

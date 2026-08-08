@@ -35,12 +35,11 @@ const PRESET_LFP_4H: Inputs = {
     landLeasePerYear: 2000,
     gridFeePerMWhThroughput: 1,
     gridFeePerKWPerYear: 2,
-    inflationPercentPerYear: 2,
-    omEscalationPercentPerYear: 0,
+    omEscalationPercentPerYear: 0.5,
   },
   finance: {
     projectLifeYears: 25,
-    wacc: 6,
+    wacc: 4,
     taxRate: 20,
     depreciationYears: 15,
     residualValuePercentOfInitialCapex: 5,
@@ -958,33 +957,11 @@ export default function ParametersView() {
             />
 
             <Controller
-              name="costs.inflationPercentPerYear"
-              control={control}
-              render={({ field }) => (
-                <NumericField
-                  label="Inflation"
-                  unit="%/year"
-                  error={costsErrors.inflationPercentPerYear?.message}
-                >
-                  <input
-                    type="number"
-                    value={field.value}
-                    onChange={(e) => field.onChange(parseFloat(e.target.value))}
-                    min={0}
-                    max={100}
-                    step={0.1}
-                    className={inputCls}
-                  />
-                </NumericField>
-              )}
-            />
-
-            <Controller
               name="costs.omEscalationPercentPerYear"
               control={control}
               render={({ field }) => (
                 <NumericField
-                  label="O&M escalation (above inflation)"
+                  label="Real O&M escalation (above inflation)"
                   unit="%/year"
                   error={costsErrors.omEscalationPercentPerYear?.message}
                 >
@@ -993,13 +970,21 @@ export default function ParametersView() {
                     value={field.value}
                     onChange={(e) => field.onChange(parseFloat(e.target.value))}
                     min={0}
-                    max={100}
+                    max={10}
                     step={0.1}
                     className={inputCls}
                   />
                 </NumericField>
               )}
             />
+
+            <p className="col-span-full text-xs text-gray-500">
+              All costs and prices are in <strong>real terms</strong> (today&rsquo;s money).
+              General inflation is not modelled: it cancels between cost escalation and
+              discounting, so the discount rate below is a <strong>real</strong> rate.
+              Use the field above only for costs expected to rise <em>faster</em> than
+              inflation, such as grid tariffs and service contracts.
+            </p>
           </Section>
 
           {/* 6. Finance */}
@@ -1031,7 +1016,7 @@ export default function ParametersView() {
               control={control}
               render={({ field }) => (
                 <SliderInput
-                  label="WACC"
+                  label="Real discount rate (WACC)"
                   unit="%"
                   value={field.value}
                   onChange={field.onChange}
@@ -1044,6 +1029,11 @@ export default function ParametersView() {
             {financeErrors.wacc && (
               <p className="text-xs text-red-600">{financeErrors.wacc.message}</p>
             )}
+            <p className="col-span-full text-xs text-gray-500">
+              Enter a <strong>real</strong> rate, since the cashflows are in today&rsquo;s
+              money. Convert a nominal WACC with (1&nbsp;+&nbsp;nominal)&nbsp;/&nbsp;(1&nbsp;+&nbsp;inflation)&nbsp;&minus;&nbsp;1
+              — e.g. 6&nbsp;% nominal at 2&nbsp;% inflation ≈ 3.9&nbsp;% real.
+            </p>
 
             <Controller
               name="finance.taxRate"

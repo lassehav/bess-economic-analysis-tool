@@ -28,13 +28,12 @@ export const costInputsSchema = z.object({
   landLeasePerYear: z.number().gte(0),
   gridFeePerMWhThroughput: z.number().gte(0),
   gridFeePerKWPerYear: z.number().gte(0),
-  inflationPercentPerYear: z.number().gte(0).lte(100),
-  omEscalationPercentPerYear: z.number().gte(0).lte(100),
+  omEscalationPercentPerYear: z.number().gte(0).lte(10),  // real escalation above inflation
 })
 
 export const financeInputsSchema = z.object({
   projectLifeYears: z.number().gte(5).lte(40),
-  wacc: z.number().gte(0).lte(30),
+  wacc: z.number().gte(0).lte(30),  // REAL discount rate
   taxRate: z.number().gte(0).lte(60),
   depreciationYears: z.number().gte(1).lte(40),
   residualValuePercentOfInitialCapex: z.number().gte(0).lte(100),

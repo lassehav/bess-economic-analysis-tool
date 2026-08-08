@@ -51,12 +51,11 @@ const DEFAULT_INPUTS: Inputs = {
     landLeasePerYear: 0,
     gridFeePerMWhThroughput: 1.0,
     gridFeePerKWPerYear: 0,
-    inflationPercentPerYear: 2.0,
     omEscalationPercentPerYear: 0.5,
   },
   finance: {
     projectLifeYears: 20,
-    wacc: 6.0,
+    wacc: 4.0,
     taxRate: 20,
     depreciationYears: 15,
     residualValuePercentOfInitialCapex: 5,
@@ -281,7 +280,7 @@ function HeadlineKpis({
   retiredAtYear: number | null
   inputs: Inputs
 }) {
-  const { npv, irr, lcos, simplePaybackYears, discountedPaybackYears, totalRevenueNominal, totalThroughputMWh } = financials
+  const { npv, irr, lcos, simplePaybackYears, discountedPaybackYears, totalRevenueReal, totalThroughputMWh } = financials
   const wacc = inputs.finance.wacc / 100
   const projectLife = inputs.finance.projectLifeYears
 
@@ -310,13 +309,13 @@ function HeadlineKpis({
         label="IRR"
         value={fmtIrr(irr)}
         color={irrColor}
-        tooltip="Internal Rate of Return: the discount rate at which NPV = 0. Compare to WACC — if IRR > WACC the project is financially viable."
+        tooltip="Internal Rate of Return: the discount rate at which NPV = 0. This is a REAL IRR — compare it to a real hurdle rate, or add expected inflation to it before comparing against a nominal WACC."
       />
       <KpiCard
         label="LCOS"
         value={`${lcos.toFixed(2)} €/MWh`}
         color="neutral"
-        tooltip="Levelised Cost of Storage: NPV of all costs divided by NPV-weighted throughput energy. Lower is better."
+        tooltip="Levelised Cost of Storage: NPV of all costs divided by NPV-weighted throughput energy, in real €/MWh. Directly comparable to the modelled price spreads. Lower is better."
       />
       <KpiCard
         label="Simple Payback"
@@ -332,9 +331,9 @@ function HeadlineKpis({
       />
       <KpiCard
         label="Total Revenue"
-        value={fmtEur(totalRevenueNominal)}
+        value={fmtEur(totalRevenueReal)}
         color="neutral"
-        tooltip="Sum of nominal gross revenues over the full project life."
+        tooltip="Sum of gross revenues over the full project life, in real terms (today's money)."
       />
       <KpiCard
         label="Total Throughput"

@@ -38,12 +38,11 @@ const DEFAULT_INPUTS: Inputs = {
     landLeasePerYear: 0,
     gridFeePerMWhThroughput: 1.0,
     gridFeePerKWPerYear: 0,
-    inflationPercentPerYear: 2.0,
     omEscalationPercentPerYear: 0.5,
   },
   finance: {
     projectLifeYears: 20,
-    wacc: 6.0,
+    wacc: 4.0,
     taxRate: 20,
     depreciationYears: 15,
     residualValuePercentOfInitialCapex: 5,
@@ -302,7 +301,7 @@ function exportCashflowCsv(inputs: Inputs, streams: AnnualStream[], financials: 
     ['Residual Value (€)', ...rows.map((r) => r.residualValue === 0 ? '' : Math.round(r.residualValue))],
     ['--- Cash Flow ---'],
     ['Net Cash Flow (€)', ...rows.map((r) => Math.round(r.cashflow))],
-    [`Discount Factor (WACC ${inputs.finance.wacc}%)`, ...rows.map((r) => r.discountFactor.toFixed(4))],
+    [`Discount Factor (real WACC ${inputs.finance.wacc}%)`, ...rows.map((r) => r.discountFactor.toFixed(4))],
     ['Discounted Cash Flow (€)', ...rows.map((r) => Math.round(r.discountedCashflow))],
     ['Cumulative DCF / NPV (€)', ...rows.map((r) => Math.round(r.cumulativeDiscountedCashflow))],
     ['--- Operational ---'],
@@ -418,7 +417,7 @@ function CashflowTable({
       <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3">
         <h3 className="text-sm font-semibold">Cash Flow Statement</h3>
         <div className="flex items-center gap-3">
-          <span className="text-xs text-gray-400">Nominal €, one row per project year</span>
+          <span className="text-xs text-gray-400">Real € (today&rsquo;s money), one row per project year</span>
           <button
             type="button"
             onClick={() => exportCashflowCsv(inputs, streams, financials)}
@@ -467,7 +466,7 @@ function CashflowTable({
             <Row bold  label="Total CAPEX"       cells={(r) => r.year === 0 ? <span className="font-semibold text-red-600">−{Math.round(cap.total).toLocaleString('fi-FI')} €</span> : dash} />
 
             {/* ── Operating Expenses ──────────────────────────── */}
-            <SectionHdr label="Operating Expenses (inflation-escalated)" />
+            <SectionHdr label="Operating Expenses (real terms; O&M escalated above inflation)" />
             <Row indent label="Fixed O&M"        cells={(r) => r.year === 0 ? dash : <CurrCell v={r.fixedOM}      sign="cost" />} />
             <Row indent label="Variable O&M"     cells={(r) => r.year === 0 ? dash : <CurrCell v={r.variableOM}   sign="cost" />} />
             <Row indent label="Insurance"        cells={(r) => r.year === 0 ? dash : <CurrCell v={r.insurance}    sign="cost" />} />
@@ -731,7 +730,7 @@ export default function SimulationView() {
                 <span>{inputs.finance.projectLifeYears} yr</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-gray-500">WACC</span>
+                <span className="text-gray-500">WACC (real)</span>
                 <span>{inputs.finance.wacc} %</span>
               </div>
             </div>

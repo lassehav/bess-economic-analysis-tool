@@ -36,20 +36,21 @@ export function computeAnnualOpex(
   stream: AnnualStream,
 ): AnnualOpex {
   const { year } = stream
-  const inflFactor = Math.pow(1 + inputs.costs.inflationPercentPerYear / 100, year)
-  const omFactor = inflFactor * Math.pow(1 + inputs.costs.omEscalationPercentPerYear / 100, year)
+  // Real terms: no general-inflation factor. Only O&M-specific real escalation applies,
+  // and it applies to the O&M lines only — insurance tracks CAPEX, land lease and grid
+  // fees are held flat in real terms.
+  const omFactor = Math.pow(1 + inputs.costs.omEscalationPercentPerYear / 100, year)
 
   const fixedOM =
     inputs.costs.fixedOmPerYear * omFactor
   const variableOM =
     inputs.costs.variableOmPerMWhThroughput * stream.throughputMWh * omFactor
   const insurance =
-    (inputs.costs.insurancePercentOfCapexPerYear / 100) * capex.total * inflFactor
-  const landLease = inputs.costs.landLeasePerYear * inflFactor
+    (inputs.costs.insurancePercentOfCapexPerYear / 100) * capex.total
+  const landLease = inputs.costs.landLeasePerYear
   const gridFees =
-    (inputs.costs.gridFeePerMWhThroughput * stream.throughputMWh +
-      inputs.costs.gridFeePerKWPerYear * inputs.battery.powerMW * 1000) *
-    inflFactor
+    inputs.costs.gridFeePerMWhThroughput * stream.throughputMWh +
+    inputs.costs.gridFeePerKWPerYear * inputs.battery.powerMW * 1000
 
   const total = fixedOM + variableOM + insurance + landLease + gridFees
   return { year, fixedOM, variableOM, insurance, landLease, gridFees, total }
@@ -65,16 +66,16 @@ export function computeAnnualPcsReplacement(
   capex: CapexBreakdown,
   yearIndex: number,
 ): AnnualPcsReplacement {
-  const { pcsReplacementIntervalYears, pcsReplacementCostPercentOfPcs, inflationPercentPerYear } =
-    inputs.costs
+  const { pcsReplacementIntervalYears, pcsReplacementCostPercentOfPcs } = inputs.costs
   const { projectLifeYears } = inputs.finance
 
   let pcsReplacementCost = 0
   let repYear = pcsReplacementIntervalYears
   while (repYear <= projectLifeYears) {
     if (repYear === yearIndex) {
-      const inflFactor = Math.pow(1 + inflationPercentPerYear / 100, yearIndex)
-      pcsReplacementCost = capex.pcs * (pcsReplacementCostPercentOfPcs / 100) * inflFactor
+      // Real terms: replacement priced in today's money. If PCS prices are expected to
+      // fall in real terms, express that through pcsReplacementCostPercentOfPcs.
+      pcsReplacementCost = capex.pcs * (pcsReplacementCostPercentOfPcs / 100)
       break
     }
     repYear += pcsReplacementIntervalYears
@@ -160,13 +161,16 @@ export function buildCashflow(inputs: Inputs, streams: AnnualStream[]): Cashflow
     const pcsResult = computeAnnualPcsReplacement(inputs, capex, y)
 
     const isFinalYear = y === projectLifeYears
-    const residualValueNominal = isFinalYear
-      ? capex.total *
-        (residualValuePercentOfInitialCapex / 100) *
-        Math.pow(1 + inputs.costs.inflationPercentPerYear / 100, y)
+    // Real terms: residual value is a fraction of initial CAPEX in today's money.
+    const residualValue = isFinalYear
+      ? capex.total * (residualValuePercentOfInitialCapex / 100)
       : 0
 
     const ebitda = revenue - opexResult.total - pcsResult.pcsReplacementCost
+    // Known simplification of the real-terms basis: tax depreciation is fixed in NOMINAL
+    // money by tax law, so its real value erodes over the depreciation period. Holding it
+    // constant in real terms slightly overstates the tax shield (order of a few % of NPV
+    // at ~2% inflation). Correcting it would require reintroducing an inflation assumption.
     const depreciationThisYear = y <= depreciationYears ? annualDepreciation : 0
     const ebit = ebitda - depreciationThisYear
 
@@ -187,7 +191,7 @@ export function buildCashflow(inputs: Inputs, streams: AnnualStream[]): Cashflow
       opexResult.total -
       pcsResult.pcsReplacementCost -
       tax +
-      residualValueNominal
+      residualValue
 
     const df = Math.pow(1 + waccDecimal, y)
     const discountedCashflow = cashflow / df
@@ -204,7 +208,7 @@ export function buildCashflow(inputs: Inputs, streams: AnnualStream[]): Cashflow
       opex: opexResult.total,
       pcsReplacement: pcsResult.pcsReplacementCost,
       capex: 0,
-      residualValue: residualValueNominal,
+      residualValue,
       ebitda,
       depreciation: depreciationThisYear,
       ebit,
@@ -223,7 +227,7 @@ export function buildCashflow(inputs: Inputs, streams: AnnualStream[]): Cashflow
 export type FinancialResults = {
   capex: CapexBreakdown
   cashflow: CashflowRow[]
-  totalRevenueNominal: number
+  totalRevenueReal: number
   totalThroughputMWh: number
   npv: number
   irr: number | null
@@ -267,7 +271,7 @@ export function computeFinancials(inputs: Inputs, streams: AnnualStream[]): Fina
   const cashflow = buildCashflow(inputs, streams)
 
   const operatingRows = cashflow.filter((r) => r.year > 0)
-  const totalRevenueNominal = operatingRows.reduce((s, r) => s + r.revenue, 0)
+  const totalRevenueReal = operatingRows.reduce((s, r) => s + r.revenue, 0)
   const totalThroughputMWh = streams.reduce((s, st) => s + st.throughputMWh, 0)
 
   const npv = cashflow[cashflow.length - 1]?.cumulativeDiscountedCashflow ?? 0
@@ -307,7 +311,9 @@ export function computeFinancials(inputs: Inputs, streams: AnnualStream[]): Fina
     }
   }
 
-  // LCOS: NPV_costs / NPV_energy
+  // LCOS: NPV_costs / NPV_energy — real €/MWh, i.e. real costs discounted at the real
+  // rate over discounted throughput. Directly comparable to the real price spreads the
+  // forecast produces.
   const waccDecimal = inputs.finance.wacc / 100
   const { projectLifeYears } = inputs.finance
 
@@ -333,7 +339,7 @@ export function computeFinancials(inputs: Inputs, streams: AnnualStream[]): Fina
   return {
     capex,
     cashflow,
-    totalRevenueNominal,
+    totalRevenueReal,
     totalThroughputMWh,
     npv,
     irr,

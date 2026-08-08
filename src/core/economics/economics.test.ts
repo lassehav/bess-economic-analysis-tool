@@ -29,7 +29,6 @@ const BASE_INPUTS: Inputs = {
     landLeasePerYear: 50000,
     gridFeePerMWhThroughput: 1,
     gridFeePerKWPerYear: 2,
-    inflationPercentPerYear: 2,
     omEscalationPercentPerYear: 0,
   },
   finance: {
@@ -98,7 +97,6 @@ describe('economics — constant revenue annuity', () => {
         landLeasePerYear: 0,
         gridFeePerMWhThroughput: 0,
         gridFeePerKWPerYear: 0,
-        inflationPercentPerYear: 0,
         omEscalationPercentPerYear: 0,
       },
       finance: {
@@ -156,7 +154,6 @@ describe('economics — known LCOS test vector', () => {
         landLeasePerYear: 0,
         gridFeePerMWhThroughput: 0,
         gridFeePerKWPerYear: 0,
-        inflationPercentPerYear: 0,
         omEscalationPercentPerYear: 0,
       },
       finance: {
@@ -209,6 +206,96 @@ describe('economics — known LCOS test vector', () => {
     const totalThroughput = totalEFC * usableMWh
     const pureLcos = batteryCapex / totalThroughput
     expect(Math.abs(pureLcos - 37.04)).toBeLessThan(0.01)
+  })
+})
+
+describe('economics — real-terms basis', () => {
+  const streams = makeStreams(20, 2_000_000, 10_000, 40, 0.9)
+
+  it('non-O&M opex lines are flat across years (no inflation escalation)', () => {
+    const result = computeFinancials(BASE_INPUTS, streams)
+    const y1 = result.cashflow.find((r) => r.year === 1)!
+    const y20 = result.cashflow.find((r) => r.year === 20)!
+
+    // Insurance, land lease and grid fees track CAPEX / physical volumes only.
+    expect(y20.insurance).toBeCloseTo(y1.insurance, 6)
+    expect(y20.landLease).toBeCloseTo(y1.landLease, 6)
+    expect(y20.gridFees).toBeCloseTo(y1.gridFees, 6)
+  })
+
+  it('O&M lines escalate at exactly the real escalation rate', () => {
+    const inputs: Inputs = {
+      ...BASE_INPUTS,
+      costs: { ...BASE_INPUTS.costs, omEscalationPercentPerYear: 1.5 },
+    }
+    const result = computeFinancials(inputs, streams)
+    const y1 = result.cashflow.find((r) => r.year === 1)!
+    const y11 = result.cashflow.find((r) => r.year === 11)!
+
+    expect(y11.fixedOM / y1.fixedOM).toBeCloseTo(Math.pow(1.015, 10), 9)
+    expect(y11.variableOM / y1.variableOM).toBeCloseTo(Math.pow(1.015, 10), 9)
+  })
+
+  it('zero real escalation makes every opex line identical across the project life', () => {
+    const inputs: Inputs = {
+      ...BASE_INPUTS,
+      costs: { ...BASE_INPUTS.costs, omEscalationPercentPerYear: 0 },
+    }
+    const result = computeFinancials(inputs, streams)
+    const operating = result.cashflow.filter((r) => r.year > 0)
+    const first = operating[0]!
+    for (const row of operating) {
+      expect(row.opex).toBeCloseTo(first.opex, 6)
+    }
+  })
+
+  it('PCS replacement equals its undiscounted real cost regardless of when it falls', () => {
+    const capex = computeCapex(BASE_INPUTS)
+    const early: Inputs = {
+      ...BASE_INPUTS,
+      costs: { ...BASE_INPUTS.costs, pcsReplacementIntervalYears: 8 },
+    }
+    const late: Inputs = {
+      ...BASE_INPUTS,
+      costs: { ...BASE_INPUTS.costs, pcsReplacementIntervalYears: 16 },
+    }
+    const expected = capex.pcs * (BASE_INPUTS.costs.pcsReplacementCostPercentOfPcs / 100)
+
+    const earlyRow = computeFinancials(early, streams).cashflow.find((r) => r.year === 8)!
+    const lateRow = computeFinancials(late, streams).cashflow.find((r) => r.year === 16)!
+
+    expect(earlyRow.pcsReplacement).toBeCloseTo(expected, 6)
+    expect(lateRow.pcsReplacement).toBeCloseTo(expected, 6)
+  })
+
+  it('residual value equals the flat percentage of initial CAPEX', () => {
+    const capex = computeCapex(BASE_INPUTS)
+    const result = computeFinancials(BASE_INPUTS, streams)
+    const final = result.cashflow.find((r) => r.year === 20)!
+    expect(final.residualValue).toBeCloseTo(capex.total * 0.05, 6)
+  })
+
+  it('LCOS is unaffected by project length when costs and throughput are flat and wacc=0', () => {
+    // With no escalation and zero discounting, LCOS collapses to
+    // (capex + N·opex − residual) / (N·throughput) — the residual keeps it from being
+    // exactly length-invariant, so we assert it against the closed form instead.
+    const inputs: Inputs = {
+      ...BASE_INPUTS,
+      costs: {
+        ...BASE_INPUTS.costs,
+        omEscalationPercentPerYear: 0,
+        pcsReplacementIntervalYears: 30,  // beyond project life — no replacement
+      },
+      finance: { ...BASE_INPUTS.finance, wacc: 0, projectLifeYears: 20 },
+    }
+    const capex = computeCapex(inputs)
+    const result = computeFinancials(inputs, streams)
+    const annualOpex = result.cashflow.find((r) => r.year === 1)!.opex
+    const residual = capex.total * 0.05
+    const totalThroughput = 20 * 10_000
+
+    const expectedLcos = (capex.total + 20 * annualOpex - residual) / totalThroughput
+    expect(result.lcos).toBeCloseTo(expectedLcos, 6)
   })
 })
 

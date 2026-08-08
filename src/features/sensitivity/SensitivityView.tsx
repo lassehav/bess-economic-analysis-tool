@@ -44,12 +44,11 @@ const DEFAULT_INPUTS: Inputs = {
     landLeasePerYear: 0,
     gridFeePerMWhThroughput: 1.0,
     gridFeePerKWPerYear: 0,
-    inflationPercentPerYear: 2.0,
     omEscalationPercentPerYear: 0.5,
   },
   finance: {
     projectLifeYears: 20,
-    wacc: 6.0,
+    wacc: 4.0,
     taxRate: 20,
     depreciationYears: 15,
     residualValuePercentOfInitialCapex: 5,
