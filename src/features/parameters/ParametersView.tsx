@@ -5,6 +5,7 @@ import { ZodError } from 'zod'
 import type { Inputs } from '../../core/types/inputs'
 import { inputsSchema } from '../../core/types/schemas'
 import { computeCapex } from '../../core/economics/index'
+import { computeSoH } from '../../core/dispatch/degradation'
 import SliderInput from '../../ui/SliderInput'
 
 // ─── Presets ──────────────────────────────────────────────────────────────────
@@ -18,13 +19,12 @@ const PRESET_LFP_4H: Inputs = {
     maxCyclesPerDay: 2,
     nominalCycleLifeEFC: 6000,
     calendarLifeYears: 20,
-    cyclesPerDayPenaltyExponent: 1.5,
     endOfLifeSoH: 0.80,
   },
   costs: {
-    batteryCapexPerKWh: 200,
+    batteryCapexPerKWh: 90,  // base 2026 estimate, turnkey LFP rack level
     pcsCapex: 450_000,       // €60/kW × 10 MW
-    bopCapex: 430_000,       // 5% × (€8 M battery + €600 k PCS)
+    bopCapex: 430_000,       // absolute BoP estimate ≈ 10% of (battery + PCS) at 2026 prices
     developmentCapexPercent: 3,
     contingencyPercent: 5,
     pcsReplacementIntervalYears: 12,
@@ -56,8 +56,8 @@ const PRESET_LFP_2H: Inputs = {
   },
   costs: {
     ...PRESET_LFP_4H.costs,
-    batteryCapexPerKWh: 180,
-    bopCapex: 210_000, // 5% × (€3.6 M battery + €600 k PCS)
+    batteryCapexPerKWh: 81,  // 0.9 × 2026 base — larger cell order per MW of PCS
+    bopCapex: 210_000, // absolute BoP estimate ≈ 10% of (battery + PCS)
   },
 }
 
@@ -73,8 +73,8 @@ const PRESET_NMC_1H: Inputs = {
   },
   costs: {
     ...PRESET_LFP_4H.costs,
-    batteryCapexPerKWh: 220,
-    bopCapex: 140_000, // 5% × (€2.2 M battery + €600 k PCS)
+    batteryCapexPerKWh: 99,  // 1.1 × 2026 base — NMC premium over LFP
+    bopCapex: 140_000, // absolute BoP estimate ≈ 10% of (battery + PCS)
   },
 }
 
@@ -88,8 +88,8 @@ const PRESET_LFP_8H: Inputs = {
   },
   costs: {
     ...PRESET_LFP_4H.costs,
-    batteryCapexPerKWh: 160,
-    bopCapex: 670_000, // 5% × (€12.8 M battery + €600 k PCS)
+    batteryCapexPerKWh: 72,  // 0.8 × 2026 base — volume discount on an 80 MWh order
+    bopCapex: 670_000, // absolute BoP estimate ≈ 10% of (battery + PCS)
   },
 }
 
@@ -208,17 +208,10 @@ function DerivedPanel({ inputs }: { inputs: Inputs }) {
     const totalLifetimeThroughput = battery.energyMWh * battery.dod * battery.nominalCycleLifeEFC
     const pureMdc = totalLifetimeThroughput > 0 ? capex.total / totalLifetimeThroughput : 0
 
-    // SoH(t) at 1 cpd — mirrors the engine's daily degradation logic:
-    // whichever mechanism (calendar or cycle) has consumed a larger share of
-    // its rated life drives SoH. Using max() prevents double-counting when
-    // both run simultaneously and matches dailyStep.ts exactly.
+    // SoH(t) at 1 cpd — the engine's own degradation function, so the panel cannot
+    // drift from the simulation.
     const eol = battery.endOfLifeSoH
-    const sohAt = (t: number): number => {
-      const efcAtT = 365 * t
-      const fracCycle = efcAtT / battery.nominalCycleLifeEFC
-      const fracCal = t / battery.calendarLifeYears
-      return Math.max(0, 1 - (1 - eol) * Math.max(fracCycle, fracCal))
-    }
+    const sohAt = (t: number): number => computeSoH(t, 365 * t, battery)
 
     const eolCapacity = battery.energyMWh * battery.dod * eol
 
@@ -611,46 +604,29 @@ export default function ParametersView() {
             />
 
             <Controller
-              name="battery.cyclesPerDayPenaltyExponent"
-              control={control}
-              render={({ field }) => (
-                <NumericField
-                  label="Cycles/day penalty exponent"
-                  error={batteryErrors.cyclesPerDayPenaltyExponent?.message}
-                >
-                  <input
-                    type="number"
-                    value={field.value}
-                    onChange={(e) => field.onChange(parseFloat(e.target.value))}
-                    min={0.5}
-                    max={3.0}
-                    step={0.1}
-                    className={inputCls}
-                  />
-                </NumericField>
-              )}
-            />
-
-            <Controller
               name="battery.endOfLifeSoH"
               control={control}
-              render={({ field }) => (
-                <NumericField
-                  label="End-of-life SoH"
-                  error={batteryErrors.endOfLifeSoH?.message}
-                >
-                  <input
-                    type="number"
-                    value={field.value}
-                    onChange={(e) => field.onChange(parseFloat(e.target.value))}
-                    min={0.01}
-                    max={0.99}
-                    step={0.01}
-                    className={inputCls}
-                  />
-                </NumericField>
-              )}
-            />
+              render={({ field }) => {
+                const eol = safeInputs.battery.endOfLifeSoH
+                return (
+                  <NumericField
+                    label="End-of-life SoH"
+                    hint={`Retirement threshold as a fraction of original capacity (0.80 = 80 %, typical warranty EoL). It also sets the size of the fade budget: the ${((1 - eol) * 100).toFixed(0)} pp between 100 % and ${(eol * 100).toFixed(0)} % is what ageing consumes over the pack's life. Once SoH crosses it the battery is retired and revenue stops.`}
+                    error={batteryErrors.endOfLifeSoH?.message}
+                  >
+                    <input
+                      type="number"
+                      value={field.value}
+                      onChange={(e) => field.onChange(parseFloat(e.target.value))}
+                      min={0.01}
+                      max={0.99}
+                      step={0.01}
+                      className={inputCls}
+                    />
+                  </NumericField>
+                )
+              }}
+            />            
           </Section>
 
           {/* 3. CAPEX */}
@@ -664,12 +640,16 @@ export default function ParametersView() {
                   unit="€/kWh"
                   value={field.value}
                   onChange={field.onChange}
-                  min={50}
+                  min={0}
                   max={500}
                   step={5}
                 />
               )}
             />
+            <p className="text-xs text-gray-400">
+              Default €90/kWh is the base 2026 estimate for turnkey LFP storage capacity (cells + racks
+              + enclosure, excluding PCS, BoP and development, which are separate lines below).
+            </p>
             {costsErrors.batteryCapexPerKWh && (
               <p className="text-xs text-red-600">{costsErrors.batteryCapexPerKWh.message}</p>
             )}

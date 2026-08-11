@@ -21,11 +21,10 @@ const DEFAULT_INPUTS: Inputs = {
     maxCyclesPerDay: 2,
     nominalCycleLifeEFC: 6000,
     calendarLifeYears: 15,
-    cyclesPerDayPenaltyExponent: 1.5,
     endOfLifeSoH: 0.80,
   },
   costs: {
-    batteryCapexPerKWh: 200,
+    batteryCapexPerKWh: 90,
     pcsCapex: 800_000,
     bopCapex: 1_760_000,
     developmentCapexPercent: 8,

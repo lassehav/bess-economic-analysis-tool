@@ -6,8 +6,9 @@ export type BatteryInputs = {
   maxCyclesPerDay: 1 | 2 | 3
   nominalCycleLifeEFC: number
   calendarLifeYears: number
-  cyclesPerDayPenaltyExponent: number
   endOfLifeSoH: number
+  // The shape of the fade curve (calendar/cycle split and the two exponents) is fixed
+  // in degradation.ts — a modelling assumption rather than a project variable.
   activationThreshold?: number | undefined  // multiplier on MDC threshold; default 1.0; >1 = more conservative
 }
 

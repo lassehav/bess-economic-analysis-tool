@@ -24,11 +24,10 @@ const DEFAULT_INPUTS: Inputs = {
     maxCyclesPerDay: 2,
     nominalCycleLifeEFC: 6000,
     calendarLifeYears: 15,
-    cyclesPerDayPenaltyExponent: 1.5,
     endOfLifeSoH: 0.80,
   },
   costs: {
-    batteryCapexPerKWh: 200,
+    batteryCapexPerKWh: 90,
     pcsCapex: 800_000,
     bopCapex: 1_760_000,
     developmentCapexPercent: 8,
@@ -449,10 +448,7 @@ export default function MonteCarloView() {
       <div className="rounded border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-800">
         <span className="font-semibold">What this operates on: </span>
         Your <span className="font-medium">Parameters</span> and the active{' '}
-        <span className="font-medium">Scenario</span>. Unlike sensitivity (one variable at
-        a time), Monte Carlo samples <span className="italic">all</span> stochastic variables
-        simultaneously using their full distributions and the correlation matrix — producing a
-        realistic joint distribution of outcomes. Each trial runs a complete 20-year simulation.
+        <span className="font-medium">Scenario</span>. Monte Carlo simulation tests thousands of realistic combinations of uncertain inputs to show the full range of possible outcomes and their probabilities.
       </div>
 
       {/* Header Layout */}
@@ -511,7 +507,7 @@ export default function MonteCarloView() {
             </div>
 
             <div className="mt-4">
-              <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Stochastic Variables ({enabledKeys.size} / {defaultVars.length} enabled)</h4>
+              <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Variables ({enabledKeys.size} / {defaultVars.length} enabled)</h4>
               <DistLegend />
               <div className="mt-2 max-h-64 overflow-y-auto">
                 {defaultVars.map((v) => (

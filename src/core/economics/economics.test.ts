@@ -12,7 +12,6 @@ const BASE_INPUTS: Inputs = {
     maxCyclesPerDay: 2,
     nominalCycleLifeEFC: 6000,
     calendarLifeYears: 20,
-    cyclesPerDayPenaltyExponent: 1.5,
     endOfLifeSoH: 0.80,
   },
   costs: {
@@ -80,8 +79,7 @@ describe('economics — constant revenue annuity', () => {
         activationThreshold: 1.0,
         nominalCycleLifeEFC: 6000,
         calendarLifeYears: 20,
-        cyclesPerDayPenaltyExponent: 1.5,
-        endOfLifeSoH: 0.80,
+            endOfLifeSoH: 0.80,
       },
       costs: {
         batteryCapexPerKWh: 200,
@@ -137,8 +135,7 @@ describe('economics — known LCOS test vector', () => {
         activationThreshold: 1.0,
         nominalCycleLifeEFC: 6000,
         calendarLifeYears: 20,
-        cyclesPerDayPenaltyExponent: 1.5,
-        endOfLifeSoH: 0.80,
+            endOfLifeSoH: 0.80,
       },
       costs: {
         batteryCapexPerKWh: 200,

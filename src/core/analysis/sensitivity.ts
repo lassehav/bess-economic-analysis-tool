@@ -269,6 +269,47 @@ export function extractMetric(outcome: SimulationOutcome, metric: 'npv' | 'irr' 
 }
 
 // ---------------------------------------------------------------------------
+// Metric scoring
+//
+// Every SimulationOutcome already carries npv, irr and lcos, so the displayed
+// metric is only a projection of results we already have. Scoring is therefore
+// kept separate from the (expensive) simulation runs.
+// ---------------------------------------------------------------------------
+
+function scoreRow(
+  row: Pick<SensitivityRow, 'variable' | 'low' | 'high'>,
+  metricAtBase: number,
+  metric: 'npv' | 'irr' | 'lcos',
+): SensitivityRow {
+  const metricAtLow = extractMetric(row.low.outcome, metric)
+  const metricAtHigh = extractMetric(row.high.outcome, metric)
+
+  return {
+    ...row,
+    metricAtBase,
+    metricAtLow,
+    metricAtHigh,
+    range: Math.abs(metricAtHigh - metricAtLow),
+    // Positive correlation means increasing the parameter improves the financial returns metric
+    isPositiveCorrelation: metricAtHigh >= metricAtLow,
+  }
+}
+
+/**
+ * Re-score an existing result against a different metric, reusing the stored
+ * outcomes. Switching NPV / IRR / LCOS runs no simulations at all.
+ */
+export function withMetric(result: SensitivityResult, metric: 'npv' | 'irr' | 'lcos'): SensitivityResult {
+  if (result.metric === metric) return result
+
+  const metricAtBase = extractMetric(result.base, metric)
+  const rows = result.rows.map((row) => scoreRow(row, metricAtBase, metric))
+  rows.sort((a, b) => b.range - a.range)
+
+  return { metric, base: result.base, rows }
+}
+
+// ---------------------------------------------------------------------------
 // Main sensitivity runner
 // ---------------------------------------------------------------------------
 
@@ -290,23 +331,15 @@ export function runSensitivity(
     const lowOutcome = runSingle(lowReq)
     const highOutcome = runSingle(highReq)
 
-    const metricAtLow = extractMetric(lowOutcome, metric)
-    const metricAtHigh = extractMetric(highOutcome, metric)
-    
-    const range = Math.abs(metricAtHigh - metricAtLow)
-    // Positive correlation means increasing the parameter improves the financial returns metric
-    const isPositiveCorrelation = metricAtHigh >= metricAtLow
-
-    return {
-      variable,
-      low: { value: lowValue, outcome: lowOutcome },
-      high: { value: highValue, outcome: highOutcome },
+    return scoreRow(
+      {
+        variable,
+        low: { value: lowValue, outcome: lowOutcome },
+        high: { value: highValue, outcome: highOutcome },
+      },
       metricAtBase,
-      metricAtLow,
-      metricAtHigh,
-      range,
-      isPositiveCorrelation,
-    }
+      metric,
+    )
   })
 
   rows.sort((a, b) => b.range - a.range)

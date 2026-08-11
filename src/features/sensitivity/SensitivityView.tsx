@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import ReactECharts from 'echarts-for-react'
 import type { Inputs } from '../../core/types/inputs'
 import type { PriceSeries } from '../../core/types/prices'
@@ -9,11 +9,12 @@ import { PRESET_SCENARIOS } from '../../core/forecast/scenarios'
 import {
   runSensitivity,
   runVariableSweep,
+  withMetric,
   DEFAULT_SENSITIVITY_VARIABLES,
   extractMetric,
 } from '../../core/analysis/sensitivity'
 import type { SensitivityResult, SensitivityVariable } from '../../core/analysis/sensitivity'
-import type { SimulationRequest } from '../../core/analysis/run'
+import type { SimulationRequest, SimulationOutcome } from '../../core/analysis/run'
 
 // ---------------------------------------------------------------------------
 // Default inputs
@@ -27,11 +28,10 @@ const DEFAULT_INPUTS: Inputs = {
     maxCyclesPerDay: 2,
     nominalCycleLifeEFC: 6000,
     calendarLifeYears: 15,
-    cyclesPerDayPenaltyExponent: 1.5,
     endOfLifeSoH: 0.80,
   },
   costs: {
-    batteryCapexPerKWh: 200,
+    batteryCapexPerKWh: 90,
     pcsCapex: 800_000,
     bopCapex: 1_760_000,
     developmentCapexPercent: 8,
@@ -56,6 +56,10 @@ const DEFAULT_INPUTS: Inputs = {
 }
 
 type Metric = 'npv' | 'irr' | 'lcos'
+
+// One base run plus a low and a high run for every swept variable.
+const VARIABLE_COUNT = DEFAULT_SENSITIVITY_VARIABLES.length
+const TOTAL_RUNS = 1 + VARIABLE_COUNT * 2
 
 function metricLabel(metric: Metric): string {
   if (metric === 'npv') return 'NPV (€)'
@@ -294,13 +298,24 @@ export default function SensitivityView() {
   const [priceSeries, setPriceSeries] = useState<PriceSeries | null>(null)
   const [status, setStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle')
   const [metric, setMetric] = useState<Metric>('npv')
-  const [result, setResult] = useState<SensitivityResult | null>(null)
+  const [rawResult, setRawResult] = useState<SensitivityResult | null>(null)
   const [selectedVariable, setSelectedVariable] = useState<SensitivityVariable | null>(null)
   const [drilldownValues, setDrilldownValues] = useState<number[]>([])
-  const [drilldownMetrics, setDrilldownMetrics] = useState<number[]>([])
+  const [drilldownOutcomes, setDrilldownOutcomes] = useState<SimulationOutcome[]>([])
   const [runHistory, setRunHistory] = useState<RunHistoryEntry[]>([])
   const [copied, setCopied] = useState(false)
   const runIdRef = useRef(0)
+
+  // A SimulationOutcome carries npv, irr and lcos together, so switching the
+  // displayed metric is a re-score of results we already hold — never a re-run.
+  const result = useMemo(
+    () => (rawResult ? withMetric(rawResult, metric) : null),
+    [rawResult, metric],
+  )
+  const drilldownMetrics = useMemo(
+    () => drilldownOutcomes.map((o) => extractMetric(o, metric)),
+    [drilldownOutcomes, metric],
+  )
 
   useEffect(() => {
     fetch('/data/fi-prices.json')
@@ -326,11 +341,13 @@ export default function SensitivityView() {
 
     setStatus('running')
     setSelectedVariable(null)
+    setDrilldownValues([])
+    setDrilldownOutcomes([])
 
     setTimeout(() => {
       try {
         const res = runSensitivity(req, DEFAULT_SENSITIVITY_VARIABLES, targetMetric)
-        setResult(res)
+        setRawResult(res)
         setStatus('done')
 
         const scenario = loadScenarioFromStorage()
@@ -351,13 +368,6 @@ export default function SensitivityView() {
       }
     }, 50)
   }, [buildRequest])
-
-  // EFFECT FIX: Auto-compute calculations whenever the user switches active dashboard tabs
-  useEffect(() => {
-    if (priceSeries && result !== null) {
-      executeSimulationSweep(metric)
-    }
-  }, [metric, priceSeries, executeSimulationSweep])
 
   function getSensJSON() {
     if (!result) return null
@@ -395,7 +405,7 @@ export default function SensitivityView() {
       try {
         const sweep = runVariableSweep(req, variable, metric)
         setDrilldownValues(sweep.values)
-        setDrilldownMetrics(sweep.outcomes.map((o) => extractMetric(o, metric)))
+        setDrilldownOutcomes(sweep.outcomes)
       } catch (err) {
         console.error('Drilldown processing loop exception:', err)
       }
@@ -405,11 +415,21 @@ export default function SensitivityView() {
   return (
     <div className="flex flex-col gap-4">
       {/* Context banner */}
-      <div className="rounded border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-800">
-        <span className="font-semibold">What this operates on: </span>
-        Your <span className="font-medium">Parameters</span> and the active{' '}
-        <span className="font-medium">Scenario Profile</span>. Changing metric tabs will automatically
-        re-evaluate the underlying sensitivity parameters to keep your views perfectly synced.
+      <div className="flex flex-col gap-2 rounded border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+        <p>
+          <span className="font-semibold">What this operates on: </span>
+          Your <span className="font-medium">Parameters</span> and the active{' '}
+          <span className="font-medium">Scenario Profile</span>, as they are saved right now. Run
+          again after changing either.
+        </p>
+        <p>        
+          Your project is first simulated exactly as configured — the base case. Then each variable
+          is tested on its own: it is moved to a low and a high value while every other input stays
+          at base, and the whole project lifetime is re-simulated for each. With{' '}
+          {VARIABLE_COUNT} variables that is <span className="font-medium">{TOTAL_RUNS} full
+          simulations</span> per run (1 base + {VARIABLE_COUNT} × 2). The longest bar is the
+          assumption your economics depend on most.
+        </p>        
       </div>
 
       {/* Control panel headers */}
@@ -440,7 +460,7 @@ export default function SensitivityView() {
             disabled={!priceSeries || status === 'running'}
             className="rounded bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40 transition-colors"
           >
-            {result === null ? 'Run Sensitivity' : 'Recalculate Current View'}
+            {result === null ? 'Run Sensitivity' : 'Re-run with Current Inputs'}
           </button>
 
           {status === 'running' && <span className="rounded bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700 animate-pulse">Computing Matrix...</span>}
@@ -458,7 +478,8 @@ export default function SensitivityView() {
 
       {result === null && status !== 'running' && (
         <div className="flex h-64 items-center justify-center rounded-lg border border-gray-200 bg-gray-50 text-sm text-gray-400">
-          Select your primary target metric optimization objective above and press Run Sensitivity.
+          Press Run Sensitivity to sweep {VARIABLE_COUNT} variables against your saved parameters
+          and scenario ({TOTAL_RUNS} simulations, a few seconds).
         </div>
       )}
 

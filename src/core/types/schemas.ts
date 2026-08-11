@@ -9,13 +9,12 @@ export const batteryInputsSchema = z.object({
   maxCyclesPerDay: z.union([z.literal(1), z.literal(2), z.literal(3)]),
   nominalCycleLifeEFC: z.number().gte(500).lte(20000),
   calendarLifeYears: z.number().gte(1).lte(30),
-  cyclesPerDayPenaltyExponent: z.number().gte(0.5).lte(3.0),
   endOfLifeSoH: z.number().gt(0).lt(1),
   activationThreshold: z.number().gte(0.5).lte(3.0).optional(),
 })
 
 export const costInputsSchema = z.object({
-  batteryCapexPerKWh: z.number().gte(50).lte(1000),
+  batteryCapexPerKWh: z.number().gte(0).lte(1000),
   pcsCapex: z.number().gte(0),
   bopCapex: z.number().gte(0),
   developmentCapexPercent: z.number().gte(0).lte(100),

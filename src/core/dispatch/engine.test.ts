@@ -4,6 +4,11 @@ import type { DailyPriceParams } from '../types/streams'
 import { makeInitialState, runDailyStep } from './dailyStep'
 import type { EngineState } from './dailyStep'
 import { runProjectSimulation } from './engine'
+import {
+  CALENDAR_FADE_SHARE,
+  CALENDAR_FADE_EXPONENT,
+  CYCLE_FADE_EXPONENT,
+} from './degradation'
 
 const DEFAULT_BAT: BatteryInputs = {
   powerMW: 10,
@@ -13,8 +18,19 @@ const DEFAULT_BAT: BatteryInputs = {
   maxCyclesPerDay: 2,
   nominalCycleLifeEFC: 6000,
   calendarLifeYears: 15,
-  cyclesPerDayPenaltyExponent: 1.5,
   endOfLifeSoH: 0.80,
+}
+
+// Independent restatement of the degradation model, so the engine is checked against
+// the formula rather than against itself. The shape constants are imported; if they
+// are ever retuned these expectations move with them.
+function expectedSoH(days: number, efc: number, bat: BatteryInputs = DEFAULT_BAT): number {
+  const F = 1 - bat.endOfLifeSoH
+  const cal = F * CALENDAR_FADE_SHARE *
+    Math.pow(days / 365 / bat.calendarLifeYears, CALENDAR_FADE_EXPONENT)
+  const cyc = F * (1 - CALENDAR_FADE_SHARE) *
+    Math.pow(efc / bat.nominalCycleLifeEFC, CYCLE_FADE_EXPONENT)
+  return Math.max(0, 1 - cal - cyc)
 }
 
 const DEFAULT_INPUTS: Inputs = {
@@ -69,8 +85,15 @@ describe('runDailyStep', () => {
     expect(result.yearAccumulator.revenue).toBe(0)
     expect(result.ageDays).toBe(1)
 
-    const expectedSoH = 1 - (1 - 0.80) / (15 * 365)
-    expect(Math.abs(result.sohAtStartOfDay - expectedSoH)).toBeLessThan(1e-9)
+    // Flat prices → no cycling, so only the calendar term moves.
+    expect(result.cumulativeEFC).toBe(0)
+    expect(Math.abs(result.sohAtStartOfDay - expectedSoH(1, 0))).toBeLessThan(1e-12)
+  })
+
+  it('Test 1b: calendar fade is concave — the first year loses more than the last', () => {
+    const firstYear = 1 - expectedSoH(365, 0)
+    const lastYear = expectedSoH(14 * 365, 0) - expectedSoH(15 * 365, 0)
+    expect(firstYear).toBeGreaterThan(lastYear * 2)
   })
 
   it('Test 2: high-margin day → revenue and cycle SoH loss', () => {
@@ -85,9 +108,14 @@ describe('runDailyStep', () => {
     expect(result.yearAccumulator.revenue).toBeGreaterThan(0)
     expect(result.yearAccumulator.throughputMWh).toBeGreaterThan(0)
 
-    const calendarOnlyLoss = (1 - 0.80) / (15 * 365)
+    // Cycle fade is additive on top of calendar fade, so a cycling day must lose
+    // strictly more than an idle day of the same age.
+    const calendarOnlyLoss = 1 - expectedSoH(1, 0)
     const actualLoss = 1.0 - result.sohAtStartOfDay
+    expect(result.cumulativeEFC).toBeGreaterThan(0)
     expect(actualLoss).toBeGreaterThan(calendarOnlyLoss)
+    expect(Math.abs(result.sohAtStartOfDay - expectedSoH(1, result.cumulativeEFC)))
+      .toBeLessThan(1e-12)
   })
 
   it('Test 3: cpd=2 degrades more than cpd=1', () => {
@@ -117,11 +145,10 @@ describe('runDailyStep', () => {
     for (let h = 18; h < 22; h++) prices[h] = 90
     const day = makeDay(prices)
 
-    const calendarLossPerDay = (1 - 0.80) / (15 * 365)
+    const calendarLossPerDay = 1 - expectedSoH(1, 0)
 
     const customState: EngineState = {
       cumulativeEFC: 0,
-      cumulativeEffectiveEFC: 0,
       ageDays: 0,
       sohAtStartOfDay: 0.801,
       retired: false,
@@ -157,7 +184,21 @@ describe('runDailyStep', () => {
     }
   })
 
-  it('Test 5: 20-year calendar-only run, retirement at ~year 15', () => {
+  it('Test 5: rated duty lands exactly on EoL', () => {
+    // The calibration that anchors the two fade terms: delivering the nominal cycle
+    // life (6000 EFC) over the calendar life (15 y) consumes exactly the fade budget.
+    expect(Math.abs(expectedSoH(15 * 365, 6000) - 0.80)).toBeLessThan(1e-12)
+
+    // Under-cycling relative to rated duty leaves the pack above EoL at T_cal...
+    expect(expectedSoH(15 * 365, 3000)).toBeGreaterThan(0.80)
+    // ...and over-cycling puts it below.
+    expect(expectedSoH(15 * 365, 9000)).toBeLessThan(0.80)
+  })
+
+  it('Test 5b: calendar ageing alone no longer retires the pack at T_cal', () => {
+    // Flat prices → zero throughput. The calendar term carries only its share of the
+    // budget, so an idle pack outlives its calendar-life figure. This is the deliberate
+    // consequence of splitting one budget between additive mechanisms.
     const days: DailyPriceParams[] = []
     for (let i = 0; i < 20 * 365; i++) {
       days.push({ ...flatDay(40), yearIndex: Math.floor(i / 365) + 1, dayOfYear: (i % 365) + 1 })
@@ -165,18 +206,12 @@ describe('runDailyStep', () => {
 
     const simResult = runProjectSimulation(DEFAULT_INPUTS, days)
 
-    expect(simResult.retiredAtYear).not.toBeNull()
-    if (simResult.retiredAtYear !== null) {
-      expect(simResult.retiredAtYear).toBeGreaterThanOrEqual(14)
-      expect(simResult.retiredAtYear).toBeLessThanOrEqual(16)
-    }
-
-    const stream14 = simResult.streams[14]
-    expect(stream14).toBeDefined()
-    if (stream14) {
-      // At the end of year 15 (index 14), the SoH is at or just below the EoL threshold.
-      // Floating point means SoH may be exactly at 0.80; use a small tolerance.
-      expect(stream14.endOfYearSoH).toBeLessThanOrEqual(0.80 + 1e-9)
+    expect(simResult.retiredAtYear).toBeNull()
+    const last = simResult.streams[simResult.streams.length - 1]
+    expect(last).toBeDefined()
+    if (last) {
+      expect(last.endOfYearSoH).toBeGreaterThan(0.80)
+      expect(Math.abs(last.endOfYearSoH - expectedSoH(20 * 365, 0))).toBeLessThan(1e-9)
     }
   })
 
